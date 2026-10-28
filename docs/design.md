@@ -65,10 +65,12 @@ ToolKeeper は**この PC に入っている道具そのもの**の版を見る�
 
 winget の `PHP.PHP.NTS.8.3`（portable の zip、8.3.36）に乗り換え、以後は §3.1 の B として扱う。乗り換えの手順は §7。
 
-- portable の zip は `%LOCALAPPDATA%\Microsoft\WinGet\Packages\PHP.PHP.NTS.8.3_Microsoft.Winget.Source_8wekyb3d8bbwe\` に展開され、
-  `%LOCALAPPDATA%\Microsoft\WinGet\Links\php.exe` が置かれる（Links は既に PATH にある）。フォルダ名に版が入らないので、更新でパスは変わらない
-- **`php.ini` は展開先に置かない。**更新で消える心配がある（未確認）。`C:\work\php-conf\php.ini` に置き、環境変数 `PHPRC` で指す
+- zip は `%LOCALAPPDATA%\Microsoft\WinGet\Packages\PHP.PHP.NTS.8.3_Microsoft.Winget.Source_8wekyb3d8bbwe\` に展開される。フォルダ名に版が入らないので、更新でパスは変わらない
+- 目録に `ArchiveBinariesDependOnPath: true` があるので、winget は Links に置かず、**展開したフォルダそのものをユーザーの PATH の末尾に足す**（DLL を一緒に読むため。2026-10-28 に確かめた）。
+  前に入れた PHP が PATH にあると、そちらが先に使われる
+- **`php.ini` は展開先に置かない。**更新で消える心配がある（未確認）。`C:\work\php-conf\php.ini` に置き、ユーザーの環境変数 `PHPRC` で指す
 - `extension_dir` は展開先の `ext` を絶対パスで書く（相対で書くと、PHP は実行したときの作業フォルダから探す）
+- `check` は、PATH の php が winget のフォルダの下にあれば winget の行に任せ、A の `php` の行を出さない
 
 ### 3.3 Ghostscript
 
@@ -192,14 +194,17 @@ toolkeeper gui              # 画面
 
 ## 7. PHP の乗り換え（1 回だけ、手で）
 
-1. 今の拡張と設定を控える: `php -m`、`php --ini`、`C:\work\php-8.3.7-nts-Win32-vs16-x64\php.ini`
+1. 今の拡張と設定を控える: `php -m`、`php --ini`、`php.ini`（`php.ini-development` と比べて、変えてある行を見る）
 2. `winget install --id PHP.PHP.NTS.8.3 --exact`
 3. `php.ini` を `C:\work\php-conf\php.ini` に写し、`extension_dir` を新しい展開先の `ext` に直す。ユーザーの環境変数 `PHPRC=C:\work\php-conf`
-4. ユーザーの PATH から `C:\work\php-8.3.7-nts-Win32-vs16-x64` を外す
-5. 新しいターミナルで `where php` が Links の 1 つだけ、`php -v` が 8.3.36、`php -m` が 1 と同じことを確かめる
-6. 古いフォルダは、しばらく残してから消す
+4. ユーザーの PATH から古いフォルダを外す（レジストリから展開せずに読み、`REG_EXPAND_SZ` のまま書く）
+5. 新しいターミナルで、`where php` が winget のフォルダの 1 つだけ、`php -v` が新しい版、`php --ini` が `C:\work\php-conf\php.ini`、`php -m` が 1 と同じことを確かめる
+6. 古いフォルダを直に指している物（IDE の設定、`.bat`、Web サーバの設定、タスク）を探して直す
+7. 古いフォルダは、しばらく残してから消す
 
-`C:\work\php-8.3.7...` を直に指している物（IDE の設定、`.bat`、Web サーバの設定）は 5 の後に探して直す。
+2026-10-28 に 8.3.7 → 8.3.36 で通した。変えてあったのは `memory_limit = 1024M`、`extension_dir`、拡張 16 個だけ。拡張の一覧は前と同じになった。
+古いフォルダを指していたのは VS Code のユーザー設定の `php.validate.executablePath` だけ（`C:\Repos` と `C:\work` の設定ファイル、タスク、環境変数、JetBrains の設定を探した）。
+古い `C:\work\php-8.3.7-nts-Win32-vs16-x64` はまだ残してある。
 
 ## 8. 画面（`toolkeeper gui`）
 
