@@ -1,0 +1,14 @@
+   -    \ 名前                                                               ID                                     バージョン    利用可能      ソース
+--------------------------------------------------------------------------------------------------------------------------------------------
+7-Zip 26.02 (x64)                                                  7zip.7zip                              26.02         26.05         winget
+FFmpeg                                                             Gyan.FFmpeg                            8.1           9.0.2         winget
+GitHub CLI                                                         GitHub.cli                             2.87.2        2.103.3       winget
+Linux 用 Windows サブシステム                                      Microsoft.WSL                          2.3.26.0      2.7.14        winget
+Microsoft Build of OpenJDK  17.0.17+10 (x64)                       Microsoft.OpenJDK.17                   17.0.17.10    17.0.21.1021  winget
+Node.js                                                            OpenJS.NodeJS.20                       20.9.0        20.20.2       winget
+NVIDIA PhysX システム ソフトウェア 9.23.1019                       Nvidia.PhysX                           9.23.1019     9.26.0703     winget
+Python Launcher                                                    Python.Launcher                        < 3.14.7      3.14.7        winget
+Zoom Workplace                                                     Zoom.Zoom.EXE                          7.1.9 (48550) 7.2.1 (48556) winget
+44 アップグレードを利用できます。
+1 個のパッケージのバージョン番号を判別できません。すべての結果を表示するには、--include-unknown を使用してください。
+1 個のパッケージにアップグレードを妨げるピンがあります。ピンを表示および編集するには、'winget pin' コマンドを使用します。'--include-pinned' 引数を使用すると、より多くの結果が表示される場合があります。

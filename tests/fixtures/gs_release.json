@@ -1,0 +1,6 @@
+{"tag_name": "gs10080", "published_at": "2026-09-08T12:29:24Z",
+ "assets": [
+  {"name": "SHA512SUMS", "browser_download_url": "https://github.com/ArtifexSoftware/ghostpdl-downloads/releases/download/gs10080/SHA512SUMS", "digest": "sha256:813c"},
+  {"name": "gs10080w32.exe", "browser_download_url": "https://github.com/ArtifexSoftware/ghostpdl-downloads/releases/download/gs10080/gs10080w32.exe", "digest": "sha256:0000"},
+  {"name": "gs10080w64.exe", "browser_download_url": "https://github.com/ArtifexSoftware/ghostpdl-downloads/releases/download/gs10080/gs10080w64.exe", "digest": "sha256:52a91b8bf09298788d7a57b9206127026c23eacd75405f0a131e26dc381dce50"}
+ ]}

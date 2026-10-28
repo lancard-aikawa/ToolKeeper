@@ -1,0 +1,9 @@
+名前                                                               ID                                           バージョン           利用可能
+--------------------------------------------------------------------------------------------------------------------------------------------------
+Godot Engine                                                       GodotEngine.GodotEngine                      4.7.2                
+Linux 用 Windows サブシステム                                      Microsoft.WSL                                2.3.26.0             2.7.14
+Microsoft Build of OpenJDK  17.0.17+10 (x64)                       Microsoft.OpenJDK.17                         17.0.17.10           17.0.21.1021
+Node.js                                                            OpenJS.NodeJS.20                             20.9.0               20.20.2
+Python 3.12.10 (64-bit)                                            Python.Python.3.12                           3.12.10              
+Python 3.14.0 (64-bit)                                             Python.Python.3.14                           3.14.0               3.14.7
+アプリ インストーラー                                              Microsoft.AppInstaller                       1.29.380.0           

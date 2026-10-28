@@ -1,0 +1,56 @@
+{
+  "data_dir": null,
+  "winget_update": [
+    "7zip.7zip",
+    "GitHub.cli",
+    "Kitware.CMake",
+    "Gyan.FFmpeg",
+    "Python.Python.3.14",
+    "Python.Launcher",
+    "Rustlang.Rustup",
+    "StrawberryPerl.StrawberryPerl",
+    "TeraTermProject.teraterm5",
+    "Microsoft.OpenJDK.11",
+    "Microsoft.OpenJDK.17",
+    "Microsoft.OpenJDK.21",
+    "EclipseAdoptium.Temurin.11.JDK",
+    "EclipseAdoptium.Temurin.8.JRE",
+    "PHP.PHP.NTS.8.3",
+    "Cygwin.CygwinSetup"
+  ],
+  "cygwin_root": "C:\\cygwin64",
+  "ghostscript": true,
+  "choco": true,
+  "eol": [
+    {
+      "id": "OpenJS\\.NodeJS\\.(\\d+)",
+      "product": "nodejs"
+    },
+    {
+      "id": "Python\\.Python\\.(\\d+\\.\\d+)",
+      "product": "python"
+    },
+    {
+      "id": "PHP\\.PHP\\.(?:NTS\\.)?(\\d+\\.\\d+)",
+      "product": "php"
+    },
+    {
+      "id": "Microsoft\\.OpenJDK\\.(\\d+)",
+      "product": "microsoft-build-of-openjdk"
+    },
+    {
+      "id": "EclipseAdoptium\\.Temurin\\.(\\d+)\\.J(?:DK|RE)",
+      "product": "eclipse-temurin"
+    }
+  ],
+  "choco_twins": {
+    "gh": "GitHub.cli",
+    "marktext": "MarkText.MarkText",
+    "microsoft-openjdk17": "Microsoft.OpenJDK.17",
+    "microsoft-openjdk-21": "Microsoft.OpenJDK.21",
+    "python314": "Python.Python.3.14",
+    "Temurin11": "EclipseAdoptium.Temurin.11.JDK",
+    "visualstudio2019buildtools": "Microsoft.VisualStudio.2019.BuildTools"
+  },
+  "cache_hours": 24
+}
