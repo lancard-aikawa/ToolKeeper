@@ -1,10 +1,11 @@
 """データフォルダの読み書きと、取ってきたものの置き場（docs/design.md §5・§9）
 
-  check.json, cache/<名前>
+  check.json, history.jsonl, lock, cache/<名前>
 """
 import json
 import os
 import urllib.request
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -46,6 +47,38 @@ def read_json(path: Path):
             return json.load(f)
     except (OSError, ValueError):
         return None
+
+
+def append_jsonl(path: Path, obj) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with open(path, "a", encoding="utf-8", newline="\n") as f:
+        f.write(json.dumps(obj, ensure_ascii=False) + "\n")
+
+
+class Busy(RuntimeError):
+    """ほかの ToolKeeper が実行中"""
+
+
+@contextmanager
+def exclusive(data: Path):
+    """<data>/lock を OS のファイルロックで押さえる。取れなければ Busy（LockWatch と同じ作り）。
+    落ちたプロセスのロックは OS が外すので、ファイルが残っても止まらない"""
+    import msvcrt
+    data.mkdir(parents=True, exist_ok=True)
+    f = open(data / "lock", "a+b")
+    try:
+        try:
+            f.seek(0)
+            msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+        except OSError as e:
+            raise Busy(f"ほかの ToolKeeper が実行中です（{data / 'lock'}）") from e
+        try:
+            yield
+        finally:
+            f.seek(0)
+            msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+    finally:
+        f.close()
 
 
 def _download(url: str) -> bytes:

@@ -7,11 +7,14 @@ from pathlib import Path
 from . import __version__, check, store, winget
 from . import config as cfgmod
 from . import status as statusmod
+from . import update as updatemod
 from .paths import data_dir, default_config_path
 
 EXIT_OK = 0
 EXIT_USAGE = 2
+EXIT_BUSY = 3
 EXIT_PARTIAL = 4  # 調べられなかった取得元がある
+EXIT_FAILED = 5   # 上げられなかった物がある
 
 TIER_LABEL = {"A": "A 専用", "B": "B winget", "C": "C winget", "D": "D choco", "E": "E 乗り換え"}
 EOL_LABEL = {"ended": "サポート終了", "soon": "もうすぐ終了"}
@@ -26,6 +29,9 @@ def _build_parser() -> argparse.ArgumentParser:
     sub.add_parser("check", help="全部を調べ、<data>/check.json に書く。前回から増えた更新を出す")
     ls = sub.add_parser("list", help="check.json を表で出す")
     ls.add_argument("--all", action="store_true", help="C・D も出す（既定は A・B・E と、サポート終了の物）")
+    up = sub.add_parser("update", help="選んだ物を上げる（区分 A・B だけ）。終わったら調べ直す")
+    up.add_argument("keys", nargs="+", metavar="キー", help="check.json の key（winget:<ID> など）")
+    up.add_argument("--no-check", action="store_true", help="終わったあとに調べ直さない")
     st = sub.add_parser("status", help="使える状態か")
     st.add_argument("--json", action="store_true", help="JSON で出す")
     return p
@@ -91,9 +97,30 @@ def main(argv: list[str] | None = None) -> int:
     data = data_dir(cfg, args.data)
 
     if args.command == "check":
-        result = check.run(cfg, data)
+        try:
+            with store.exclusive(data):
+                result = check.run(cfg, data)
+        except store.Busy as e:
+            print(e, file=sys.stderr)
+            return EXIT_BUSY
         _print_table(result, show_all=False)
         return EXIT_PARTIAL if result["failed"] else EXIT_OK
+    if args.command == "update":
+        try:
+            with store.exclusive(data):
+                done = updatemod.run(data, args.keys)
+                if not args.no_check:
+                    print("\n調べ直しています…", flush=True)
+                    check.run(cfg, data)
+        except store.Busy as e:
+            print(e, file=sys.stderr)
+            return EXIT_BUSY
+        except updatemod.Refused as e:
+            print(e, file=sys.stderr)
+            return EXIT_USAGE
+        failed = [d["key"] for d in done if not d["ok"]]
+        print(f"\n済み {len(done) - len(failed)} 件、失敗 {len(failed)} 件" + (f": {', '.join(failed)}" if failed else ""))
+        return EXIT_FAILED if failed else EXIT_OK
     if args.command == "list":
         result = store.read_json(data / check.CHECK_FILE)
         if not result:

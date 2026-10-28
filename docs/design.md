@@ -147,6 +147,13 @@ toolkeeper gui              # 画面
 
 - `check` は道具ごとに独立して動かす。1 つが失敗しても（ネットが無い、Cygwin が無いなど）残りは出し、失敗した物は理由を付けて出す
 - `update` は 1 つずつ順に動かす（winget は並べて動かせない）。結果を `<data>/history.jsonl` に足す
+  （`{at, key, from, to, ok, code, tail}`。`code` は `0x8A15002B` の形、`tail` は失敗したときの出力の最後の 20 行）
+  - 上げてよいのは `check.json` で区分が A・B、`updatable` の物だけ。1 つでも外れた物を選んだら、どれも動かさずに理由を出して止める
+  - 手で入れた PHP（`php`）は選べない。§7 の乗り換えを案内する
+  - winget の `0x8A15002B`（上げる物が無い。ほかで先に上げた）は失敗にしない
+  - 1 つが失敗しても残りは続ける。終わったら `check` をもう一度流して `check.json` を今の状態にする（`--no-check` で流さない）
+- `check` と `update` は `<data>/lock` で排他する。取れなければ終了コード 3
+- 終了コード: 0 成功、2 使い方の誤り・上げられない物を選んだ、3 実行中、4 調べられなかった取得元がある（`check`）、5 上げられなかった物がある（`update`）
 - タスクスケジューラ: 週 1 回 `check`。窓を出さないよう、LockWatch と同じく本体の `pythonw.exe` で `scripts/toolkeeper-launch.py` を動かす（`scripts/find-pythonw.ps1`）
 
 `check.json` の形は §9.1。
