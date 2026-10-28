@@ -1,7 +1,9 @@
 """コマンドライン（docs/design.md §5）"""
 import argparse
+import contextlib
 import json
 import sys
+import traceback
 from pathlib import Path
 
 from . import __version__, check, store, winget
@@ -25,7 +27,8 @@ def _build_parser() -> argparse.ArgumentParser:
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
     p.add_argument("--config", help="設定ファイル（既定: プログラムの置き場所の toolkeeper.json）")
     p.add_argument("--data", help="データの場所（設定より優先）")
-    sub = p.add_subparsers(dest="command", required=True)
+    p.add_argument("--log", action="store_true", help="今回の出力を <data>/last-run.log に書く（定期実行の pythonw 用）")
+    sub =p.add_subparsers(dest="command", required=True)
     sub.add_parser("check", help="全部を調べ、<data>/check.json に書く。前回から増えた更新を出す")
     ls = sub.add_parser("list", help="check.json を表で出す")
     ls.add_argument("--all", action="store_true", help="C・D も出す（既定は A・B・E と、サポート終了の物）")
@@ -86,7 +89,7 @@ def main(argv: list[str] | None = None) -> int:
     for s in (sys.stdout, sys.stderr):
         try:
             s.reconfigure(encoding="utf-8", errors="replace")
-        except (AttributeError, ValueError):
+        except (AttributeError, ValueError):  # pythonw では None
             pass
     args = _build_parser().parse_args(argv)
     try:
@@ -95,7 +98,23 @@ def main(argv: list[str] | None = None) -> int:
         print(f"設定を読めません: {e}", file=sys.stderr)
         return EXIT_USAGE
     data = data_dir(cfg, args.data)
+    if not args.log:
+        return _dispatch(args, cfg, data)
+    # pythonw では標準出力が捨てられるので、今回の出力をファイルに残す（design.md §5）
+    data.mkdir(parents=True, exist_ok=True)
+    with open(data / "last-run.log", "w", encoding="utf-8", newline="\n") as log, \
+            contextlib.redirect_stdout(log), contextlib.redirect_stderr(log):
+        print(f"{store.iso(store.now())} toolkeeper {' '.join(argv if argv is not None else sys.argv[1:])}")
+        try:
+            code = _dispatch(args, cfg, data)
+        except Exception:
+            traceback.print_exc()
+            code = 1
+        print(f"{store.iso(store.now())} 終了コード {code}")
+    return code
 
+
+def _dispatch(args, cfg: dict, data: Path) -> int:
     if args.command == "check":
         try:
             with store.exclusive(data):

@@ -4,7 +4,7 @@ from pathlib import Path
 
 from . import __version__, check, choco, ghostscript, store, winget
 
-TASK_NAME = "ToolKeeper"
+TASK_NAME = "ToolKeeper check"  # scripts/register-task.ps1 の -Name の既定と同じ
 
 
 def task_registered() -> bool:

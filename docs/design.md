@@ -173,7 +173,11 @@ toolkeeper gui              # 画面
   - 1 つが失敗しても残りは続ける。終わったら `check` をもう一度流して `check.json` を今の状態にする（`--no-check` で流さない）
 - `check` と `update` は `<data>/lock` で排他する。取れなければ終了コード 3
 - 終了コード: 0 成功、2 使い方の誤り・上げられない物を選んだ、3 実行中、4 調べられなかった取得元がある（`check`）、5 上げられなかった物がある（`update`）
-- タスクスケジューラ: 週 1 回 `check`。窓を出さないよう、LockWatch と同じく本体の `pythonw.exe` で `scripts/toolkeeper-launch.py` を動かす（`scripts/find-pythonw.ps1`）
+- タスクスケジューラ: `scripts/register-task.ps1` が「ToolKeeper check」を登録する（既定は毎週月曜 9:00。逃したら次に動ける時。ネットが無ければ動かない。30 分で打ち切り）。
+  登録するのは `check` だけで、`update` は登録しない（§4）。窓を出さないよう、LockWatch と同じく本体の `pythonw.exe`（`scripts/find-pythonw.ps1` が探す）で
+  `scripts/toolkeeper-launch.py --log check` を動かす。`--log` は出力を `<data>/last-run.log` に書く（`pythonw` では標準出力が捨てられる）
+- タスクはレジストリから環境を組み立て直して動くので、PATH を変えたあとでも新しい値で調べる。手で開いたままのターミナルから `check` を流すと、
+  開いたときの古い PATH で調べる（2026-10-28、PHP の乗り換えのあとに古い PHP が「手で入れた物」として出た）
 
 `check.json` の形は §9.1。
 
@@ -288,7 +292,7 @@ RepoTether の「確かめる」と、ToolKeeper の画面の上の欄が使う�
 }
 ```
 
-- `task` はタスクスケジューラの登録を `schtasks /query /tn ToolKeeper` の終了コードで見る（登録は `scripts/register-task.ps1`）。
+- `task` はタスクスケジューラの登録を `schtasks /query /tn "ToolKeeper check"` の終了コードで見る（登録は `scripts/register-task.ps1`）。
   次の実行時刻は出さない（`schtasks` の一覧の見出しが言語で変わるため）
 - 道具が無ければ `sources` のその値を `null` にする（Cygwin を入れていない PC など）
 - `winget --version` と `choco --version` だけは呼ぶ（どちらも 1 秒以内）
