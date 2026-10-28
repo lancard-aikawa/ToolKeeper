@@ -108,7 +108,7 @@ def main(argv: list[str] | None = None) -> int:
     if args.command == "update":
         try:
             with store.exclusive(data):
-                done = updatemod.run(data, args.keys)
+                done = updatemod.run(cfg, data, args.keys)
                 if not args.no_check:
                     print("\n調べ直しています…", flush=True)
                     check.run(cfg, data)

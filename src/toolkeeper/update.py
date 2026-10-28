@@ -5,11 +5,12 @@
 結果は <data>/history.jsonl に足す。
 """
 import codecs
+import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-from . import check, store, winget
+from . import check, ghostscript, store, winget
 
 HISTORY_FILE = "history.jsonl"
 TAIL_LINES = 20
@@ -36,7 +37,7 @@ def plan(result: dict, keys: list[str]) -> list[dict]:
             bad.append(f"{k}: 新しい版がありません")
         elif k == "php":
             bad.append("php: 手で入れた PHP は、先に winget へ乗り換えてください（design.md §7）")
-        elif not k.startswith("winget:"):
+        elif _kind(k) not in RUNNERS:
             bad.append(f"{k}: まだ作っていません")
         else:
             out.append(it)
@@ -70,19 +71,64 @@ def _stream(args: list[str], out) -> tuple[int, str]:
     return code & 0xFFFFFFFF, tail
 
 
-def run(data: Path, keys: list[str], out=None, runner=_stream) -> list[dict]:
+def _kind(key: str) -> str:
+    return key.split(":", 1)[0]
+
+
+def _winget(it: dict, cfg: dict, data: Path, out, stream=_stream) -> tuple[int, str]:
+    return stream(winget_args(it["key"].split(":", 1)[1]), out)
+
+
+def _ghostscript(it: dict, cfg: dict, data: Path, out) -> tuple[int, str]:
+    """取る → SHA-256 と署名 → gs-install.ps1 を管理者として（入れる・PATH を書き換える）→ レジストリで確かめる（§3.3）"""
+    rel = ghostscript.latest(data / "cache", cfg["cache_hours"])
+    have = ghostscript.installed()
+    folder = data / "downloads" / "ghostscript"
+    try:
+        exe = ghostscript.download(rel, folder, out)
+    except Exception as e:  # noqa: BLE001 (理由を履歴に残す)
+        out.write(f"{e}\n")
+        return 1, str(e)
+    log = data / "downloads" / "ghostscript-install.log"
+    out.write("インストーラを動かします（UAC の確認が出ます）\n")
+    out.flush()
+    code = ghostscript.run_elevated(exe, rel["version"], have[-1] if have else None, log)
+    try:
+        text = log.read_text(encoding="ascii", errors="replace")
+    except OSError:
+        text = "（記録がありません。UAC を断ったか、スクリプトが動きませんでした）\n"
+    out.write(text)
+    if code == 0 and rel["version"] not in ghostscript.installed():
+        code, text = 11, text + "入れたあとに新しい版がレジストリに見つかりません\n"
+    if code == 0:
+        shutil.rmtree(folder, ignore_errors=True)
+    elif code in ghostscript.SCRIPT_EXIT:
+        out.write(ghostscript.SCRIPT_EXIT[code] + "\n")
+    tail = "\n".join(text.strip().splitlines()[-TAIL_LINES:])
+    return code, tail
+
+
+# 取得元ごとの上げ方。it, cfg, data, out → (終了コード, 出力の最後)
+RUNNERS = {"winget": _winget, "ghostscript": _ghostscript}
+
+
+def run(cfg: dict, data: Path, keys: list[str], out=None, runners: dict | None = None) -> list[dict]:
     """選んだ物を順に上げ、1 件ずつの結果を返す。1 つが失敗しても残りは続ける"""
     out = out or sys.stdout
+    runners = runners or RUNNERS
     result = store.read_json(data / check.CHECK_FILE)
     if not result:
         raise Refused("まだ調べていません（toolkeeper check）")
     done = []
     for it in plan(result, keys):
-        winget_id = it["key"].split(":", 1)[1]
-        out.write(f"\n== {it['name']} ({winget_id}) {it['installed']} -> {it['latest']}\n")
+        out.write(f"\n== {it['name']} ({it['key']}) {it['installed']} -> {it['latest']}\n")
         out.flush()
-        code, tail = runner(winget_args(winget_id), out)
-        ok = code == 0 or code in NOT_APPLICABLE
+        try:
+            code, tail = runners[_kind(it["key"])](it, cfg, data, out)
+        except Exception as e:  # noqa: BLE001 (1 つが失敗しても残りは続ける)
+            code, tail = 1, f"{type(e).__name__}: {e}"
+            out.write(tail + "\n")
+        ok = code == 0 or (_kind(it["key"]) == "winget" and code in NOT_APPLICABLE)
         rec = {"at": store.iso(store.now()), "key": it["key"], "from": it["installed"], "to": it["latest"],
                "ok": ok, "code": f"0x{code:08X}", "tail": None if code == 0 else tail}
         store.append_jsonl(data / HISTORY_FILE, rec)

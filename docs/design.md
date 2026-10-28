@@ -82,14 +82,24 @@ winget の `PHP.PHP.NTS.8.3`（portable の zip、8.3.36）に乗り換え、以
 
 上げる:
 
-1. `gs<N>w64.exe` を取る。`digest` の SHA-256 と合わなければ止める。Authenticode の署名者が Artifex でなければ止める
-   （`Get-AuthenticodeSignature` を `powershell.exe` で呼ぶときは `PSModulePath` を外す。ProcCheck で 5.1 の署名確認が全部失敗した件）
-2. `gs<N>w64.exe /S` で入れる（NSIS。UAC が出る）。新しい版は別のフォルダ（`gs10.08.0`）に入り、古い版は残る
-3. PATH の `C:\Program Files\gs\gs10.05.1\bin` を新しいフォルダに書き換える。マシンの PATH なので管理者権限が要り、
-   `scripts/gs-path.ps1` を `Start-Process -Verb RunAs` で呼ぶ
-4. 古い版は消さずに、画面に「古い版を消す」（`uninstgs.exe /S`）を出す。直に `gs10.05.1` を指している設定がほかにあれば、消す前に直せるように
+1. `gs<N>w64.exe` を、ほかに何も無い `<data>/downloads/ghostscript/` に取る。`digest` の SHA-256 と合わなければ止める
+   （GitHub が `digest` を返さなければ入れない）。前に取った物の SHA-256 が合えば取り直さない（65 MB。手元では 3〜7 分かかった）
+2. Authenticode の状態が `Valid` で、署名者に `O="Artifex Software, Inc."` が無ければ止める。
+   `Get-AuthenticodeSignature` を `powershell.exe`（5.1）で呼ぶときは `PSModulePath` を外す（PowerShell 7 から起動すると引き継がれ、全部失敗する。ProcCheck の件）。
+   **Windows の Python の `os.environ` は名前を大文字（`PSMODULEPATH`）で持つ**ので、大文字小文字を区別せずに外す（2026-10-28、`pop("PSModulePath")` では消えずに失敗した）
+3. `scripts/gs-install.ps1` を `Start-Process -Verb RunAs` で動かす（UAC が 1 回）。スクリプトの出力は見えないので、`<data>/downloads/ghostscript-install.log` に書かせて読む
+   1. 入れる**前に**、古い版の bin の場所をレジストリ（`GS_DLL`）から読んでおく
+   2. `gs<N>w64.exe /S` で入れる
+   3. マシンとユーザーの PATH の古い bin を新しい bin に書き換える。インストーラが既に直していれば触らない。新しい行が既にあって古い行も残っていれば、古い行を消す。
+      PATH はレジストリから展開せずに読み、`REG_EXPAND_SZ` のまま書く（`[Environment]::GetEnvironmentVariable` は `%SystemRoot%` を展開して返すので使わない）
+4. 新しい版がレジストリに載ったことを確かめ、取ったインストーラを消す
 
-未確認: `/S` で黙って入るか、PATH を自分で書き換えるか。最初の 1 回は手元で確かめてから処理を固める。
+10.05.1 → 10.08.0 で確かめたこと（2026-10-28）:
+
+- `/S` で画面を出さずに入る。終了コードは 0
+- **インストーラが古い版を自分で消す**（フォルダ・レジストリ・アンインストールの登録）。そのため「古い版を消す」は作らない（`old:` の印は、手で入れた古い版が残っているときだけ出る）
+- **インストーラがマシンの PATH を自分で直す**（古い行を消し、新しい行を末尾に足す）。ほかの 36 行と `%...%` の 7 行は変わらなかった。
+  ToolKeeper の書き換えは、インストーラがそうしない版に当たったときのための備え（HKCU の試験用のキーで、置き換え・重ならない・既に直っている・無い、の 4 つを確かめた）
 
 ### 3.4 Cygwin
 
@@ -275,5 +285,4 @@ RepoTether の「確かめる」と、ToolKeeper の画面の上の欄が使う�
 
 - 新しい更新を知らせる手段（Windows の通知、Slack、画面を開いたときだけ、RepoTether の「道具」タブの数（§9））
 - choco と二重の物の外し方（`choco uninstall <名前> -n` で choco の記録だけ消せるかを確かめる）。外し終われば `choco_twins` は要らなくなる
-- Ghostscript の古い版を自動で消すか
 - FFmpeg のように大きい版が上がる物を B に置いたままにするか（2026-10-28 は B に置くと決めた）

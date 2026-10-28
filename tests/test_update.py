@@ -1,3 +1,4 @@
+import copy
 import io
 import json
 import tempfile
@@ -5,6 +6,7 @@ import unittest
 from pathlib import Path
 
 from toolkeeper import check, store, update
+from toolkeeper.config import DEFAULTS
 
 
 def item(key, tier="B", updatable=True, name=None):
@@ -16,8 +18,9 @@ RESULT = {"schema": 1, "items": [
     item("winget:Gyan.FFmpeg"), item("winget:7zip.7zip"),
     item("winget:Microsoft.WSL", tier="C"), item("choco:gh", tier="D"), item("winget:OpenJS.NodeJS.20", tier="E"),
     item("winget:Python.Python.3.12", updatable=False),
-    item("php", tier="A"), item("cygwin", tier="A"),
+    item("php", tier="A"), item("ghostscript", tier="A"),
 ]}
+CFG = copy.deepcopy(DEFAULTS)
 
 
 class Plan(unittest.TestCase):
@@ -31,6 +34,9 @@ class Plan(unittest.TestCase):
                     "winget:Nope", "php"):
             with self.subTest(bad), self.assertRaises(update.Refused):
                 update.plan(RESULT, ["winget:Gyan.FFmpeg", bad])
+
+    def test_ghostscript_is_allowed(self):
+        self.assertEqual([it["key"] for it in update.plan(RESULT, ["ghostscript"])], ["ghostscript"])
 
     def test_php_points_to_migration(self):
         with self.assertRaises(update.Refused) as cm:
@@ -48,17 +54,20 @@ class Run(unittest.TestCase):
     def tearDown(self):
         self.tmp.cleanup()
 
-    def runner(self, codes):
-        def run(args, out):
+    def runners(self, codes):
+        def stream(args, out):
             self.calls.append(args)
             code = codes[len(self.calls) - 1]
             out.write("installing...\r\n")
             return code, "" if code == 0 else "インストーラーが失敗しました"
-        return run
+
+        def gs(it, cfg, data, out):
+            raise RuntimeError("SHA-256 が合いません")
+        return {"winget": lambda it, cfg, data, out: update._winget(it, cfg, data, out, stream), "ghostscript": gs}
 
     def test_runs_in_order_and_keeps_going(self):
         out = io.StringIO()
-        done = update.run(self.data, ["winget:Gyan.FFmpeg", "winget:7zip.7zip"], out, self.runner([0x8A150011, 0]))
+        done = update.run(CFG, self.data, ["winget:Gyan.FFmpeg", "winget:7zip.7zip"], out, self.runners([0x8A150011, 0]))
         self.assertEqual([c[3] for c in self.calls], ["Gyan.FFmpeg", "7zip.7zip"])
         self.assertIn("--exact", self.calls[0])
         self.assertNotIn("--include-pinned", self.calls[0])
@@ -70,13 +79,18 @@ class Run(unittest.TestCase):
         self.assertEqual([h["key"] for h in hist], ["winget:Gyan.FFmpeg", "winget:7zip.7zip"])
 
     def test_not_applicable_is_not_failure(self):
-        done = update.run(self.data, ["winget:7zip.7zip"], io.StringIO(), self.runner([0x8A15002B]))
+        done = update.run(CFG, self.data, ["winget:7zip.7zip"], io.StringIO(), self.runners([0x8A15002B]))
         self.assertTrue(done[0]["ok"])
 
     def test_no_check_yet(self):
         (self.data / check.CHECK_FILE).unlink()
         with self.assertRaises(update.Refused):
-            update.run(self.data, ["winget:7zip.7zip"], io.StringIO(), self.runner([0]))
+            update.run(CFG, self.data, ["winget:7zip.7zip"], io.StringIO(), self.runners([0]))
+
+    def test_exception_in_one_keeps_going(self):
+        done = update.run(CFG, self.data, ["ghostscript", "winget:7zip.7zip"], io.StringIO(), self.runners([0]))
+        self.assertEqual([d["ok"] for d in done], [False, True])
+        self.assertIn("SHA-256", done[0]["tail"])
 
 
 class Exclusive(unittest.TestCase):
