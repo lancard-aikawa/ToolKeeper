@@ -1,0 +1,26 @@
+"""check.json の値を人に見せる言葉（CLI の表と画面で同じものを使う）"""
+
+TIER_LABEL = {"A": "A 専用", "B": "B winget", "C": "C winget", "D": "D choco", "E": "E 乗り換え"}
+EOL_LABEL = {"ended": "サポート終了", "soon": "もうすぐ終了"}
+
+
+def can_update(it: dict) -> bool:
+    """更新のボタンを付けてよいか（区分 A・B で新しい版がある。手で入れた PHP は §7 の乗り換えが先）"""
+    return it["tier"] in ("A", "B") and bool(it.get("updatable")) and "manual" not in (it.get("notes") or [])
+
+
+def note_text(it: dict) -> str:
+    parts = []
+    if it.get("eol") and it["eol"]["state"] in EOL_LABEL:
+        e = it["eol"]
+        parts.append(f"{EOL_LABEL[e['state']]} {e['date'] or ''}".strip())
+    for n in it.get("notes") or []:
+        kind, _, val = n.partition(":")
+        parts.append({"manual": "手で入れた物（winget へ乗り換え）", "twin": f"winget でも見えている ({val.split(':', 1)[-1]})",
+                      "old": f"古い版 {val} も入っている", "running": f"動いている: {val}",
+                      "pinned": f"pin {val} 件" if val else "pin"}.get(kind, n))
+    if it.get("packages"):
+        parts.append(f"古いパッケージ {it['packages']['outdated']}/{it['packages']['installed']}")
+    if it.get("new"):
+        parts.insert(0, "新しい")
+    return "、".join(parts)
