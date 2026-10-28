@@ -83,6 +83,34 @@ def outdated(installed: dict[str, str], current: dict[str, str]) -> list[str]:
     return sorted(n for n, v in installed.items() if n in current and current[n] != v)
 
 
+# ---- 上げる（§3.4）
+
+SETUP_ID = "Cygwin.CygwinSetup"
+
+
+def setup_exe() -> Path | None:
+    """winget の Cygwin.CygwinSetup（portable）が置く cygwinsetup.exe。無ければ None"""
+    import os
+    p = Path(os.environ.get("LOCALAPPDATA", "")) / "Microsoft" / "WinGet" / "Links" / "cygwinsetup.exe"
+    return p if p.exists() else None
+
+
+def setup_args(exe: Path, root: Path, mirror_url: str, package_dir: str) -> list[str]:
+    """画面の入力なしで、入っている物を全部上げる。--wait は、管理者に上がった子のプロセスを待つ
+    （Setup は asInvoker で作られていて、自分で UAC を出して上がる）。--only-site はミラーの一覧を取らない"""
+    return [str(exe), "--quiet-mode", "--wait", "--upgrade-also", "--root", str(root),
+            "--site", mirror_url, "--only-site", "--local-package-dir", package_dir,
+            "--no-desktop", "--no-shortcuts", "--no-startmenu"]
+
+
+def log_tail(root: Path, lines: int) -> str:
+    try:
+        with open(root / "var" / "log" / "setup.log", encoding="utf-8", errors="replace") as f:
+            return "\n".join(f.read().strip().splitlines()[-lines:])
+    except OSError:
+        return ""
+
+
 # ---- 動いているプロセス（更新の前に閉じてもらう。終了はしない）
 
 def running(root: Path) -> list[str]:

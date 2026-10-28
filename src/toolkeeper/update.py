@@ -10,7 +10,7 @@ import subprocess
 import sys
 from pathlib import Path
 
-from . import check, ghostscript, store, winget
+from . import check, cygwin, ghostscript, store, winget
 
 HISTORY_FILE = "history.jsonl"
 TAIL_LINES = 20
@@ -108,8 +108,43 @@ def _ghostscript(it: dict, cfg: dict, data: Path, out) -> tuple[int, str]:
     return code, tail
 
 
+def _cygwin(it: dict, cfg: dict, data: Path, out, stream=_stream) -> tuple[int, str]:
+    """動いている物があれば止める → Cygwin Setup を winget で用意 → 入っている物を全部上げる → 古い物が残っていないか見る（§3.4）"""
+    root = Path(cfg["cygwin_root"])
+    names = cygwin.running(root)
+    if names:
+        msg = f"Cygwin のプログラムが動いています。閉じてからやり直してください: {', '.join(names)}"
+        out.write(msg + "\n")
+        return 1, msg
+    exe = cygwin.setup_exe()
+    if exe is None:
+        out.write("Cygwin Setup を winget で入れます\n")
+        code, tail = stream(["winget", "install", "--id", cygwin.SETUP_ID, *winget_args(cygwin.SETUP_ID)[4:]], out)
+        exe = cygwin.setup_exe()
+        if exe is None:
+            return code or 1, tail or "Cygwin Setup を入れられませんでした"
+    rc = cygwin.read_setup_rc(root)
+    mirror = cygwin.mirror(rc)
+    package_dir = (rc.get("last-cache") or [str(data / "cache" / "cygwin-packages")])[0]
+    out.write(f"Cygwin Setup を動かします（UAC の確認が出ます。ミラー {mirror}）\n")
+    out.flush()
+    r = subprocess.run(cygwin.setup_args(exe, root, mirror, package_dir), capture_output=True,
+                       creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    code = r.returncode & 0xFFFFFFFF
+    tail = cygwin.log_tail(root, TAIL_LINES)
+    out.write(tail + "\n")
+    left = cygwin.outdated(cygwin.read_installed(root), cygwin.latest(mirror, data / "cache", cfg["cache_hours"]))
+    if left:
+        msg = f"上げたあとも古い物が {len(left)} 個あります: {', '.join(left[:20])}"
+        out.write(msg + "\n")
+        tail += "\n" + msg
+        if code == 0:
+            code = 1
+    return code, tail
+
+
 # 取得元ごとの上げ方。it, cfg, data, out → (終了コード, 出力の最後)
-RUNNERS = {"winget": _winget, "ghostscript": _ghostscript}
+RUNNERS = {"winget": _winget, "ghostscript": _ghostscript, "cygwin": _cygwin}
 
 
 def run(cfg: dict, data: Path, keys: list[str], out=None, runners: dict | None = None) -> list[dict]:

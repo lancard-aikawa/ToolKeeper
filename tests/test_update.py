@@ -4,6 +4,7 @@ import json
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from toolkeeper import check, store, update
 from toolkeeper.config import DEFAULTS
@@ -91,6 +92,26 @@ class Run(unittest.TestCase):
         done = update.run(CFG, self.data, ["ghostscript", "winget:7zip.7zip"], io.StringIO(), self.runners([0]))
         self.assertEqual([d["ok"] for d in done], [False, True])
         self.assertIn("SHA-256", done[0]["tail"])
+
+
+class CygwinRunner(unittest.TestCase):
+    def test_running_programs_stop_before_setup(self):
+        """動いている物は終了させず、名前を出して止める"""
+        out = io.StringIO()
+        with mock.patch.object(update.cygwin, "running", return_value=["mintty.exe", "bash.exe"]), \
+             mock.patch.object(update.subprocess, "run") as run:
+            code, tail = update._cygwin(item("cygwin", tier="A"), CFG, Path("."), out)
+        self.assertEqual(code, 1)
+        self.assertIn("mintty.exe", tail)
+        run.assert_not_called()
+
+    def test_setup_args(self):
+        args = update.cygwin.setup_args(Path(r"C:\x\cygwinsetup.exe"), Path(r"C:\cygwin64"),
+                                        "https://ftp.jaist.ac.jp/pub/cygwin/", r"C:\dl")
+        for a in ("--quiet-mode", "--wait", "--upgrade-also", "--only-site", "--no-desktop"):
+            self.assertIn(a, args)
+        self.assertEqual(args[args.index("--root") + 1], r"C:\cygwin64")
+        self.assertEqual(args[args.index("--local-package-dir") + 1], r"C:\dl")
 
 
 class Exclusive(unittest.TestCase):

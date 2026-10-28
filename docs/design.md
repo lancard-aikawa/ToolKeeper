@@ -114,11 +114,18 @@ winget の `PHP.PHP.NTS.8.3`（portable の zip、8.3.36）に乗り換え、以
 
 上げる:
 
-1. Cygwin の中のプログラムが動いていれば止める（実行ファイルのパスが `C:\cygwin64\` で始まるプロセス）。**プロセスを勝手に終了しない**。名前を画面に出して、閉じてもらう
-2. Cygwin Setup を winget の `Cygwin.CygwinSetup`（portable、2.937）で最新にする。winget が SHA-256 を照合するので、自分では取らない
-3. `setup-x86_64.exe --quiet-mode --upgrade-also --root C:\cygwin64 --site <ミラー> --local-package-dir <setup.rc の last-cache> --no-desktop --no-shortcuts --no-startmenu`
+1. Cygwin の中のプログラムが動いていれば止める（実行ファイルのパスが `C:\cygwin64\` で始まるプロセス。`EnumProcesses` と `QueryFullProcessImageNameW` を ctypes で呼ぶ）。
+   **プロセスを勝手に終了しない**。名前を出して、閉じてもらう
+2. Cygwin Setup は winget の `Cygwin.CygwinSetup`（portable、2.937）を使う。winget が SHA-256 を照合するので、自分では取らない。
+   `%LOCALAPPDATA%\Microsoft\WinGet\Links\cygwinsetup.exe`（シンボリックリンク）に置かれる。無ければ `winget install` で入れる。
+   Setup そのものの更新は B の `Cygwin.CygwinSetup` として winget の行で出る
+3. `cygwinsetup.exe --quiet-mode --wait --upgrade-also --root C:\cygwin64 --site <ミラー> --only-site --local-package-dir <setup.rc の last-cache> --no-desktop --no-shortcuts --no-startmenu`
+   - Setup は `asInvoker` で作られていて、管理者が要ると自分で UAC を出して上がる。`--wait` で、上がった子のプロセスが終わるまで待つ（PowerShell のスクリプトは挟まない）
+   - `--only-site` はミラーの一覧を取らない
+   - Setup の出力は見えないので、`<root>/var/log/setup.log` の最後の 20 行を読む（このファイルは前の回の分も残っている）
+4. `installed.db` と `setup.xz` で古い物が残っていないか見る。残っていれば失敗にする
 
-未確認: winget で入れた Cygwin Setup のコマンドの名前と場所、`--quiet-mode` で UAC がいくつ出るか。
+3.6.0-1 → 3.6.12-1（古いパッケージ 38 個）で確かめたこと（2026-10-28）: UAC は 1 回、124 秒、終了コード 0。新しく要るようになったパッケージが 3 個入り、77 個 → 80 個、古い物 0 個。
 
 ### 3.5 choco（D）
 
