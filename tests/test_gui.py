@@ -129,6 +129,7 @@ class Window(unittest.TestCase):
         app = self.app
         app._set_buttons(False)
         self.assertFalse(any(app.enabled(b) for b in app.buttons))
+        self.assertEqual(app.update_button.cget("bg"), gui.PRIMARY_OFF)  # 青のままだと押せそうに見える
         app._set_buttons(True)
         self.assertTrue(all(app.enabled(b) for b in app.buttons))
         self.assertEqual(str(app.update_button.cget("cursor")), "hand2")

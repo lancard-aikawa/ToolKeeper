@@ -28,7 +28,7 @@ from .paths import APP_DIR, data_dir
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 PICK_OFF, PICK_ON = "[ ]", "[x]"
 HOVER_BG = "#dbeafe"
-PRIMARY_BG, PRIMARY_HOVER, PRIMARY_ACTIVE = "#2563eb", "#1e40af", "#1e3a8a"
+PRIMARY_BG, PRIMARY_HOVER, PRIMARY_ACTIVE, PRIMARY_OFF = "#2563eb", "#1e40af", "#1e3a8a", "#9ca3af"
 PLAIN_FG = "#777777"
 
 
@@ -243,7 +243,8 @@ class App:
                                        font=("", 9, "bold"))
         self.update_button.bind("<Enter>", lambda _e: self.update_button.cget("state") != tk.DISABLED
                                 and self.update_button.config(bg=PRIMARY_HOVER))
-        self.update_button.bind("<Leave>", lambda _e: self.update_button.config(bg=PRIMARY_BG))
+        self.update_button.bind("<Leave>", lambda _e: self.update_button.config(
+            bg=PRIMARY_OFF if self.update_button.cget("state") == tk.DISABLED else PRIMARY_BG))
         self.buttons = [
             self.update_button,
             ttk.Button(buttons, text="調べ直す", command=lambda: self.run_command("調べ直す", self.toolkeeper("check")),
@@ -336,8 +337,8 @@ class App:
         """押せないボタンは指のカーソルにしない（ttk.Button と tk.Button の両方）"""
         if isinstance(button, ttk.Button):
             button.state(["!disabled"] if on else ["disabled"])
-        else:
-            button.config(state=tk.NORMAL if on else tk.DISABLED)
+        else:  # 塗った主役のボタン。押せない間は灰色にする（青のままだと押せそうに見える）
+            button.config(state=tk.NORMAL if on else tk.DISABLED, bg=PRIMARY_BG if on else PRIMARY_OFF)
         button.config(cursor="hand2" if on else "")
 
     @staticmethod
