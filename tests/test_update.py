@@ -8,6 +8,7 @@ from unittest import mock
 
 from toolkeeper import check, store, update
 from toolkeeper.config import DEFAULTS
+from tests.helpers import fixture
 
 
 def item(key, tier="B", updatable=True, name=None):
@@ -69,12 +70,34 @@ class Run(unittest.TestCase):
             raise RuntimeError("SHA-256 が合いません")
         return {"winget": lambda it, cfg, data, out: update._winget(it, cfg, data, out, stream), "ghostscript": gs}
 
-    def run_update(self, keys, codes, out=None, regs=None, explain=EXPLAIN.get):
-        """regs はレジストリを読むたびに返す値の並び（無ければ毎回同じ値）"""
+    def run_update(self, keys, codes, out=None, regs=None, explain=EXPLAIN.get, msi=()):
+        """regs はレジストリを読むたびに返す値の並び（無ければ毎回同じ値）。msi は Windows インストーラーのエラー"""
         regs = list(regs or [])
         same = {"machine": {"Path": r"C:\Windows"}, "user": {}}
+        self.msi_calls = []
+
+        def msi_events(since):
+            self.msi_calls.append(since)
+            return list(msi)
         return update.run(CFG, self.data, keys, out or io.StringIO(), self.runners(codes), explain=explain,
-                          read_env=lambda: regs.pop(0) if regs else same)
+                          read_env=lambda: regs.pop(0) if regs else same, msi_events=msi_events)
+
+    def test_msi_error_in_reason_and_admin(self):
+        """winget は 1603 としか言わないが、イベントログには 1730（管理者でないと消せない）が残る（2026-10-29 Strawberry Perl）"""
+        msi = update.parse_msi_errors(fixture("msi_events.xml"))
+        done = self.run_update(["winget:Gyan.FFmpeg"], [0x8A150030], msi=msi[-1:])
+        self.assertIn("Windows インストーラー: Error 1730. You must be an Administrator", done[0]["reason"])
+        self.assertTrue(done[0]["admin"])
+        self.assertEqual(len(self.msi_calls), 1)
+
+    def test_msi_not_read_on_success(self):
+        done = self.run_update(["winget:Gyan.FFmpeg"], [0])
+        self.assertEqual((done[0]["admin"], self.msi_calls), (False, []))
+
+    def test_other_msi_errors_are_not_admin(self):
+        msi = [{"code": 1603, "text": "Error 1603. Fatal error during installation."}]
+        done = self.run_update(["winget:Gyan.FFmpeg"], [0x8A150030], msi=msi)
+        self.assertFalse(done[0]["admin"])
 
     def test_runs_in_order(self):
         done = self.run_update(["winget:Gyan.FFmpeg", "winget:7zip.7zip"], [0, 0])
@@ -177,6 +200,32 @@ class Exclusive(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class MsiEvents(unittest.TestCase):
+    def test_parse(self):
+        got = update.parse_msi_errors(fixture("msi_events.xml"))
+        self.assertEqual([e["code"] for e in got], [1603, 1730])  # wevtutil は新しい順。古い順に直す。エラーの番号が無い物は捨てる
+        self.assertTrue(got[1]["text"].startswith("Error 1730. You must be an Administrator to remove this application."))
+
+    def test_broken_or_dtd(self):
+        self.assertEqual(update.parse_msi_errors("<Event"), [])
+        self.assertEqual(update.parse_msi_errors('<!DOCTYPE x [<!ENTITY a "b">]><Event/>'), [])
+        self.assertEqual(update.parse_msi_errors(""), [])
+
+
+class AdminTerminal(unittest.TestCase):
+    def test_args(self):
+        argv = update.admin_terminal_args("StrawberryPerl.StrawberryPerl")
+        self.assertEqual(argv[:5], ["powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command"])
+        self.assertIn("-Verb RunAs", argv[5])
+        self.assertIn("'-NoExit'", argv[5])
+        self.assertIn("'winget upgrade --id StrawberryPerl.StrawberryPerl --exact'", argv[5])
+
+    def test_refuses_odd_ids(self):
+        for bad in ("", "a b", "x';calc;'", "x;y", "x`y", "x$(y)"):
+            with self.subTest(bad), self.assertRaises(ValueError):
+                update.admin_terminal_args(bad)
 
 
 class Stream(unittest.TestCase):

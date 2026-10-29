@@ -125,17 +125,21 @@ def history_rows(path: Path, limit: int = 500) -> list[tuple]:
             for h in reversed(_read_history(path, limit))]
 
 
-def result_text(path: Path, since: str, keys: list[str], names: dict[str, str]) -> tuple[str, bool] | None:
-    """更新が終わったあとに出す知らせ: (文, 失敗があるか)。since より後の記録に、失敗も環境変数の変化も無ければ None"""
+def result_text(path: Path, since: str, keys: list[str], names: dict[str, str]) -> tuple[str, bool, list[str]] | None:
+    """更新が終わったあとに出す知らせ: (文, 失敗があるか, 管理者でないと上げられなかった winget の ID)。
+    since より後の記録に、失敗も環境変数の変化も無ければ None"""
     recs = [h for h in _read_history(path) if h.get("at", "") >= since and h.get("key") in keys]
     failed = [h for h in recs if not h.get("ok")]
     changed = [h for h in recs if h.get("env")]
     if not failed and not changed:
         return None
+    admin = [h["key"].split(":", 1)[1] for h in failed if h.get("admin") and h["key"].startswith("winget:")]
     parts = []
     for h in failed:
         parts.append(f"{names.get(h['key'], h['key'])} を上げられませんでした（終了コード {h.get('code', '')}）")
         parts += [f"  {x}" for x in _reason_of(h).splitlines()]
+        if h.get("admin"):
+            parts.append("  管理者でないと上げられない物です。このあと、管理者のターミナルで上げるかを聞きます")
     ran = {h["key"] for h in recs}
     rest = [names.get(k, k) for k in keys if k not in ran]
     if rest:
@@ -147,7 +151,7 @@ def result_text(path: Path, since: str, keys: list[str], names: dict[str, str]) 
     if changed:
         parts += ["", "普段使う版が変わっていないかを「環境」のタブで確かめてください"]
     parts += ["", "出力は下の欄に、記録は「履歴」のタブにあります"]
-    return "\n".join(p for p in parts if p is not None), bool(failed)
+    return "\n".join(p for p in parts if p is not None), bool(failed), admin
 
 
 def _mark(tree, key: str, on: bool) -> None:
@@ -483,10 +487,30 @@ class App:
             # 成功しても、インストーラが環境変数を書き換えていれば知らせる
             got = result_text(self.data / update.HISTORY_FILE, since, keys, labels)
             if got:
-                text, failed = got
+                text, failed, admin = got
                 (messagebox.showerror if failed else messagebox.showwarning)("ToolKeeper", text, parent=self.root)
+                for winget_id in admin:
+                    self.offer_admin_terminal(winget_id, labels.get(f"winget:{winget_id}", winget_id))
 
         self.run_command(f"{len(keys)} 件を更新", self.toolkeeper("update", *keys), after=after)
+
+    def offer_admin_terminal(self, winget_id: str, name: str) -> None:
+        """管理者でないと上げられない物（MSI の 1730 など）を、管理者のターミナルで上げるかを聞いて開く。
+        ToolKeeper が裏で管理者として動かすのではなく、窓を開いてコマンドと出力を本人に見せる（2026-10-29 Strawberry Perl）"""
+        try:
+            argv = update.admin_terminal_args(winget_id)
+        except ValueError as e:
+            messagebox.showerror("ToolKeeper", str(e), parent=self.root)
+            return
+        if not messagebox.askyesno(
+                "ToolKeeper", f"{name} は、管理者でないと上げられません。\n\n管理者のターミナルを開いて、次を動かしますか。\n\n"
+                f"  winget upgrade --id {winget_id} --exact\n\n「はい」を押すと UAC の確認が出ます。終わっても窓は閉じないので、"
+                "結果を読んでから閉じてください。そのあと「調べ直す」を押してください", parent=self.root):
+            return
+        try:
+            subprocess.Popen(argv, creationflags=_NO_WINDOW)
+        except OSError as e:
+            messagebox.showerror("ToolKeeper", f"ターミナルを開けません: {e}", parent=self.root)
 
     def register_task(self, unregister: bool) -> None:
         script = APP_DIR / "scripts" / "register-task.ps1"

@@ -13,7 +13,9 @@ import subprocess
 import sys
 import threading
 import time
+from datetime import datetime, timezone
 from pathlib import Path
+from xml.etree import ElementTree
 
 from . import check, cygwin, env, ghostscript, store, winget
 
@@ -25,6 +27,11 @@ TICK_SECONDS = 2.0
 NOT_APPLICABLE = {0x8A15002B}
 # 出力の最後の行の「…終了コードで失敗しました: 1603」の 1603（インストーラ自身の終了コード。文は言語で変わるので数だけ見る）
 _INNER_CODE = re.compile(r"[:：]\s*(\d{3,10})\s*$")
+# Windows インストーラーのエラーのうち、管理者でないとできないもの。1730: 管理者でないと消せない（2026-10-29 Strawberry Perl。
+# --silent を外しても UAC の確認を出さない）、1925: 全員向けに入れる権限が無い
+ADMIN_CODES = {1730, 1925}
+ADMIN_ID = re.compile(r"[A-Za-z0-9._+-]+")
+_EVT = "{http://schemas.microsoft.com/win/2004/08/events/event}"
 
 
 class Refused(ValueError):
@@ -194,9 +201,44 @@ def explain(code: int) -> str | None:
     return lines[-1] if r.returncode == 0 and len(lines) >= 2 else None  # 1 行目はコードと名前
 
 
-def _reason(it: dict, code: int, tail: str, explain) -> str | None:
+def parse_msi_errors(xml_text: str) -> list[dict]:
+    """wevtutil qe /f:xml の出力（<Event> が並ぶだけで根が無い）→ [{code, text}]。古い順。
+    読むのは Windows 自身のイベントログで、DTD は入らない（入っていれば読まない）。標準の ElementTree は外部実体も解かない"""
+    if "<!DOCTYPE" in xml_text or "<!ENTITY" in xml_text:
+        return []
+    try:
+        root = ElementTree.fromstring(f"<Events>{xml_text}</Events>")
+    except ElementTree.ParseError:
+        return []
+    out = []
+    for ev in root.findall(f"{_EVT}Event"):
+        data = ev.find(f"{_EVT}EventData/{_EVT}Data")
+        text = (data.text or "") if data is not None else ""
+        m = re.search(r"-- (Error (\d+)\..*)$", text, re.S)
+        if m:
+            out.append({"code": int(m.group(2)), "text": m.group(1).strip()})
+    return list(reversed(out))
+
+
+def msi_errors(since: datetime) -> list[dict]:
+    """since より後に Windows インストーラーが Application のログに書いたエラー。winget は MSI の失敗を
+    「1603: Fatal error during installation.」としか言わないが、ここには本当の理由が残る
+    （2026-10-29 Strawberry Perl: "Error 1730. You must be an Administrator to remove this application."）。
+    文は製品と MSI の物で、Windows の言語では変わらない。読めなければ []"""
+    at = since.astimezone(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    q = (f"*[System[Provider[@Name='MsiInstaller'] and Level=2 and TimeCreated[@SystemTime>='{at}']]]")
+    try:
+        r = subprocess.run(["wevtutil", "qe", "Application", f"/q:{q}", "/f:xml", "/rd:true", "/c:10"],
+                           capture_output=True, timeout=30, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except (OSError, subprocess.TimeoutExpired):
+        return []
+    return parse_msi_errors(r.stdout.decode("utf-8", errors="replace")) if r.returncode == 0 else []
+
+
+def _reason(it: dict, code: int, tail: str, explain, msi: list[dict] = ()) -> str | None:
     """失敗の理由。winget は出力が進み具合と「失敗しました」だけで、なぜかが分からない（2026-10-29 OpenJDK 17）ので、
-    winget の終了コードの意味と、出力の最後の行にインストーラの終了コードがあればその意味を引く。ほかは出力の最後の行"""
+    winget の終了コードの意味と、出力の最後の行にインストーラの終了コードがあればその意味を引く。
+    msi は Windows インストーラーのエラー（msi_errors）。ほかは出力の最後の行"""
     last = (tail or "").strip().splitlines()[-1:]
     if _kind(it["key"]) != "winget":
         return last[0] if last else None
@@ -205,7 +247,18 @@ def _reason(it: dict, code: int, tail: str, explain) -> str | None:
     if m:
         inner = int(m.group(1))
         parts.append(f"インストーラの終了コード {inner}: {explain(inner) or '（意味を引けませんでした）'}")
+    parts += [f"Windows インストーラー: {e['text']}" for e in msi]
     return "\n".join(parts)
+
+
+def admin_terminal_args(winget_id: str) -> list[str]:
+    """管理者の PowerShell を開いて winget upgrade を動かす引数（画面の「管理者のターミナルで上げる」）。
+    窓は閉じない（-NoExit）ので、結果を本人が読める。ID は check.json の物でも、決まった文字だけを通す"""
+    if not ADMIN_ID.fullmatch(winget_id or ""):
+        raise ValueError(f"ID に使えない文字があります: {winget_id!r}")
+    inner = f"winget upgrade --id {winget_id} --exact"
+    return ["powershell.exe", "-NoProfile", "-WindowStyle", "Hidden", "-Command",
+            f"Start-Process powershell.exe -Verb RunAs -ArgumentList '-NoExit','-NoProfile','-Command','{inner}'"]
 
 
 # 取得元ごとの上げ方。it, cfg, data, out → (終了コード, 出力の最後)
@@ -220,7 +273,7 @@ def _read_env(read):
 
 
 def run(cfg: dict, data: Path, keys: list[str], out=None, runners: dict | None = None, explain=explain,
-        read_env=env.read_registry) -> list[dict]:
+        read_env=env.read_registry, msi_events=msi_errors) -> list[dict]:
     """選んだ物を順に上げ、動かした物の結果を 1 件ずつ返す。1 つが失敗したら、そこで止める。
     1 件ごとに前と後でレジストリの環境変数と PATH を比べ、変わっていれば env に入れる"""
     out = out or sys.stdout
@@ -234,6 +287,7 @@ def run(cfg: dict, data: Path, keys: list[str], out=None, runners: dict | None =
         out.write(f"\n== {it['name']} ({it['key']}) {it['installed']} -> {it['latest']}\n")
         out.flush()
         before = _read_env(read_env)
+        started = datetime.now(timezone.utc)
         try:
             code, tail = runners[_kind(it["key"])](it, cfg, data, out)
         except Exception as e:  # noqa: BLE001 (理由を履歴に残して止める)
@@ -242,9 +296,11 @@ def run(cfg: dict, data: Path, keys: list[str], out=None, runners: dict | None =
         after = _read_env(read_env) if before is not None else None
         changed = env.changes(before, after, cfg["env_vars"]) if after is not None else []
         ok = code == 0 or (_kind(it["key"]) == "winget" and code in NOT_APPLICABLE)
-        reason = None if ok else _reason(it, code, tail, explain)
+        msi = msi_events(started) if not ok and _kind(it["key"]) == "winget" else []
+        reason = None if ok else _reason(it, code, tail, explain, msi)
         rec = {"at": store.iso(store.now()), "key": it["key"], "from": it["installed"], "to": it["latest"],
-               "ok": ok, "code": f"0x{code:08X}", "reason": reason, "env": changed, "tail": None if code == 0 else tail}
+               "ok": ok, "code": f"0x{code:08X}", "reason": reason,
+               "admin": any(e["code"] in ADMIN_CODES for e in msi), "env": changed, "tail": None if code == 0 else tail}
         store.append_jsonl(data / HISTORY_FILE, rec)
         done.append(rec)
         out.write(f"-- {'済み' if ok else '失敗'}（終了コード {rec['code']}）\n")

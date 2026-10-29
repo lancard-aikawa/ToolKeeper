@@ -138,9 +138,11 @@ class History(unittest.TestCase):
         before = dict(self.FAILED, at="2026-10-29T10:00:00+09:00", key=keys[1])  # 前の回の失敗は出さない
         with tempfile.TemporaryDirectory() as d:
             p = self.write(d, [before, self.FAILED])
-            text, failed = gui.result_text(p, "2026-10-29T18:35:21+09:00", keys, names)
+            text, failed, admin = gui.result_text(p, "2026-10-29T18:35:21+09:00", keys, names)
             ok = gui.result_text(self.write(d, [dict(self.FAILED, ok=True)]), "2026-10-29T18:35:21+09:00", keys, names)
         self.assertTrue(failed)
+        self.assertEqual(admin, [])
+        self.assertNotIn("管理者", text)
         self.assertIn("OpenJDK 17 を上げられませんでした（終了コード 0x8A150030）", text)
         self.assertIn("インストーラの終了コード 1603", text)
         self.assertIn("失敗したので、次の物は動かしていません:\n  OpenJDK 21", text)
@@ -151,12 +153,22 @@ class History(unittest.TestCase):
         rec = dict(self.FAILED, ok=True, reason=None, env=[
             {"scope": "machine", "name": "JAVA_HOME", "old": r"C:\jdk-21\\", "new": r"C:\jdk-17\\"}])
         with tempfile.TemporaryDirectory() as d:
-            text, failed = gui.result_text(self.write(d, [rec]), "2026-10-29T18:35:21+09:00",
-                                           ["winget:Microsoft.OpenJDK.17"], {"winget:Microsoft.OpenJDK.17": "OpenJDK 17"})
+            text, failed, _admin = gui.result_text(self.write(d, [rec]), "2026-10-29T18:35:21+09:00",
+                                                   ["winget:Microsoft.OpenJDK.17"], {"winget:Microsoft.OpenJDK.17": "OpenJDK 17"})
         self.assertFalse(failed)
         self.assertTrue(text.startswith("OpenJDK 17 のインストーラが環境変数を書き換えました:\n"
                                         "  マシンの JAVA_HOME: C:\\jdk-21\\\\ → C:\\jdk-17\\\\"))
         self.assertIn("「環境」のタブ", text)
+
+    def test_admin_failure(self):
+        """管理者でないと上げられない物は、管理者のターミナルで上げるかを聞く（2026-10-29 Strawberry Perl）"""
+        key = "winget:StrawberryPerl.StrawberryPerl"
+        rec = dict(self.FAILED, key=key, admin=True)
+        with tempfile.TemporaryDirectory() as d:
+            text, failed, admin = gui.result_text(self.write(d, [rec]), "2026-10-29T18:35:21+09:00", [key], {key: "Perl"})
+        self.assertTrue(failed)
+        self.assertEqual(admin, ["StrawberryPerl.StrawberryPerl"])
+        self.assertIn("管理者のターミナルで上げるかを聞きます", text)
 
 
 class WindowBase(unittest.TestCase):
@@ -196,6 +208,22 @@ class WindowBase(unittest.TestCase):
 
 class Window(WindowBase):
     """道具のタブ: 選ぶ・押せない行は押せない・閉じる、までを通す。環境のタブは既定（見るだけ）"""
+
+    def test_admin_terminal_only_after_yes(self):
+        with mock.patch.object(gui.messagebox, "askyesno", return_value=False), \
+                mock.patch.object(gui.subprocess, "Popen") as popen:
+            self.app.offer_admin_terminal("StrawberryPerl.StrawberryPerl", "Perl")
+        popen.assert_not_called()
+        with mock.patch.object(gui.messagebox, "askyesno", return_value=True) as ask, \
+                mock.patch.object(gui.subprocess, "Popen") as popen:
+            self.app.offer_admin_terminal("StrawberryPerl.StrawberryPerl", "Perl")
+        self.assertIn("winget upgrade --id StrawberryPerl.StrawberryPerl --exact", ask.call_args[0][1])
+        self.assertEqual(popen.call_args[0][0], update.admin_terminal_args("StrawberryPerl.StrawberryPerl"))
+        with mock.patch.object(gui.messagebox, "askyesno") as ask, mock.patch.object(gui.messagebox, "showerror"), \
+                mock.patch.object(gui.subprocess, "Popen") as popen:
+            self.app.offer_admin_terminal("x';calc;'", "bad")
+        ask.assert_not_called()
+        popen.assert_not_called()
 
     def test_close_while_running_asks(self):
         """仕事が動いている間に閉じようとしたら確かめる（2026-10-29、閉じたら裏の更新が落ちた）"""

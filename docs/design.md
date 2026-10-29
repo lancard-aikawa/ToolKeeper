@@ -260,6 +260,12 @@ toolkeeper gui              # 画面
     winget の終了コードの意味を引き、出力の最後の行の末尾に数（インストーラ自身の終了コード。文は言語で変わるので数だけ見る）があれば、
     それも `winget error` で引く。例: `winget: アンインストール コマンドの実行に失敗しました` / `インストーラの終了コード 1603: Fatal error during installation.`。
     winget 以外は `tail` の最後の行
+  - winget が失敗したら、その 1 件を始めた時刻より後に Windows インストーラーが Application のログに書いたエラー
+    （`wevtutil qe Application` で `Provider=MsiInstaller`・`Level=2`、XML で読む）を `reason` に足す（`Windows インストーラー: Error 1730. …`）。
+    MSI の本当の理由は、winget には「1603」としか届かない（2026-10-29 Strawberry Perl: `Error 1730. You must be an Administrator to remove this application.`）。
+    文は製品と MSI の物で、Windows の言語では変わらない。DTD が入っていれば読まない
+  - そのエラーが 1730（管理者でないと消せない）か 1925（全員向けに入れる権限が無い）なら、記録に `admin: true` を付ける。
+    この MSI は `--silent` を外しても UAC の確認を出さない（OpenJDK とは違う）ので、管理者のターミナルで上げてもらう（§8）
   - 上げてよいのは `check.json` で区分が A・B、`updatable` の物だけ。1 つでも外れた物を選んだら、どれも動かさずに理由を出して止める
   - 手で入れた PHP（`php`）は選べない。§7 の乗り換えを案内する
   - winget の `0x8A15002B`（上げる物が無い。ほかで先に上げた）は失敗にしない
@@ -341,6 +347,10 @@ tkinter。LockWatch と同じ決まり（絵文字を使わない、下のボタ
   （失敗があればエラーの窓、無ければ注意の窓）
 - 仕事が動いている間に「閉じる」か窓の x を押したら、「閉じても仕事は裏で最後まで続くが、出力と終わったときの知らせは見えなくなる。
   結果は履歴のタブで見られる」と出して確かめる
+- 失敗の記録に `admin: true`（§5）があれば、エラーの窓のあとに「管理者のターミナルを開いて `winget upgrade --id <ID> --exact` を動かすか」を聞く。
+  「はい」で `Start-Process powershell.exe -Verb RunAs -ArgumentList '-NoExit','-NoProfile','-Command','winget upgrade --id <ID> --exact'` を動かす
+  （UAC の確認が出る。窓は閉じないので結果を本人が読み、そのあと「調べ直す」を押す。ToolKeeper が動かした物ではないので、履歴には残らない）。
+  ToolKeeper が裏で管理者として動かさないのは、コマンドと出力を本人に見せるため。ID は英数字と `.` `-` `_` `+` だけを通す
 
 環境のタブ: §3.7 の結果を表に（選ぶ・状態・種類・範囲（マシン・ユーザー）・名前・値・説明・直し方）。開いたときと「読み直す」で、レジストリから読み直す（速いので CLI を挟まない）。
 
