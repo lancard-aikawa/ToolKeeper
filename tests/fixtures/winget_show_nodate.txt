@@ -1,0 +1,8 @@
+見つかりました Microsoft Build of OpenJDK with Hotspot 21 [Microsoft.OpenJDK.21]
+バージョン: 21.0.13.1021
+公開元: Microsoft
+インストーラー:
+  インストーラーの種類: wix
+  インストーラーの URL: https://aka.ms/download-jdk/microsoft-jdk-21.0.13.0.2-windows-x64.msi#winget
+  インストーラーの SHA256: 7a6700302e6079708a4596f8f84ff9d73516cda6ae6da91024063ac7c2a196e8
+  オフライン配信をサポート: true

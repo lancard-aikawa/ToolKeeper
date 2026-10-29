@@ -61,8 +61,9 @@ def table_rows(result: dict | None, show_all: bool, picked: set[str]) -> list[tu
             continue
         pick = can_update(it)
         mark = (PICK_ON if it["key"] in picked else PICK_OFF) if pick else ""
+        # latest_date は後から足した項目で、前の check.json には無い
         rows.append((it["key"], (mark, TIER_LABEL[it["tier"]], it["name"], it["installed"] or "-", it["latest"] or "-",
-                                 note_text(it)), pick))
+                                 it.get("latest_date") or "-", note_text(it)), pick))
     return rows
 
 
@@ -91,22 +92,62 @@ def env_rows(found: list[dict], picked: set[str], fixable: bool = True) -> list[
     return rows
 
 
-def history_rows(path: Path, limit: int = 500) -> list[tuple]:
-    """history.jsonl を新しい順に: (時刻, キー, 前, 後, 結果, 終了コード)"""
+def _read_history(path: Path, limit: int = 500) -> list[dict]:
+    """history.jsonl の最後の limit 行を古い順に。壊れた行は飛ばす"""
     try:
         with open(path, encoding="utf-8") as f:
             lines = f.read().splitlines()
     except OSError:
         return []
-    rows = []
-    for line in reversed(lines[-limit:]):
+    out = []
+    for line in lines[-limit:]:
         try:
-            h = json.loads(line)
+            out.append(json.loads(line))
         except ValueError:
             continue
-        rows.append((h.get("at", "").replace("T", " ")[:19], h.get("key", ""), h.get("from") or "-", h.get("to") or "-",
-                     "済み" if h.get("ok") else "失敗", h.get("code", "")))
-    return rows
+    return out
+
+
+def _reason_of(h: dict) -> str:
+    """失敗の理由。reason は後から足した項目なので、無い記録は出力の最後の行を使う"""
+    if h.get("ok"):
+        return ""
+    if h.get("reason"):
+        return h["reason"]
+    tail = (h.get("tail") or "").strip().splitlines()
+    return tail[-1] if tail else ""
+
+
+def history_rows(path: Path, limit: int = 500) -> list[tuple]:
+    """history.jsonl を新しい順に: (時刻, キー, 前, 後, 結果, 終了コード, 理由)"""
+    return [(h.get("at", "").replace("T", " ")[:19], h.get("key", ""), h.get("from") or "-", h.get("to") or "-",
+             "済み" if h.get("ok") else "失敗", h.get("code", ""), " / ".join(_reason_of(h).splitlines()))
+            for h in reversed(_read_history(path, limit))]
+
+
+def result_text(path: Path, since: str, keys: list[str], names: dict[str, str]) -> tuple[str, bool] | None:
+    """更新が終わったあとに出す知らせ: (文, 失敗があるか)。since より後の記録に、失敗も環境変数の変化も無ければ None"""
+    recs = [h for h in _read_history(path) if h.get("at", "") >= since and h.get("key") in keys]
+    failed = [h for h in recs if not h.get("ok")]
+    changed = [h for h in recs if h.get("env")]
+    if not failed and not changed:
+        return None
+    parts = []
+    for h in failed:
+        parts.append(f"{names.get(h['key'], h['key'])} を上げられませんでした（終了コード {h.get('code', '')}）")
+        parts += [f"  {x}" for x in _reason_of(h).splitlines()]
+    ran = {h["key"] for h in recs}
+    rest = [names.get(k, k) for k in keys if k not in ran]
+    if rest:
+        parts += ["", "失敗したので、次の物は動かしていません:", *[f"  {x}" for x in rest]]
+    for h in changed:
+        # インストーラが JAVA_HOME と PATH を自分向けに書き換え、普段使う版が変わることがある（2026-10-29 OpenJDK 17）
+        parts += ["" if parts else None, f"{names.get(h['key'], h['key'])} のインストーラが環境変数を書き換えました:",
+                  *[f"  {env.change_text(c)}" for c in h["env"]]]
+    if changed:
+        parts += ["", "普段使う版が変わっていないかを「環境」のタブで確かめてください"]
+    parts += ["", "出力は下の欄に、記録は「履歴」のタブにあります"]
+    return "\n".join(p for p in parts if p is not None), bool(failed)
 
 
 def _mark(tree, key: str, on: bool) -> None:
@@ -161,8 +202,8 @@ class App:
         # 下のステータス行を、本体より先に置く（落とし穴: 本体が場所を食ってフッターが消える）
         bar = ttk.Frame(root)
         bar.pack(side=tk.BOTTOM, fill=tk.X, padx=8, pady=6)
-        ttk.Button(bar, text="閉じる", command=self.close, cursor="hand2").pack(side=tk.RIGHT)
-        root.protocol("WM_DELETE_WINDOW", self.close)
+        ttk.Button(bar, text="閉じる", command=self.ask_close, cursor="hand2").pack(side=tk.RIGHT)
+        root.protocol("WM_DELETE_WINDOW", self.ask_close)
         self.message = ttk.Label(bar, text="")
         self.message.pack(side=tk.LEFT, fill=tk.X, expand=True)
 
@@ -175,6 +216,15 @@ class App:
 
         self._after = self.root.after(100, self._poll)
         self.reload()
+
+    def ask_close(self) -> None:
+        """「閉じる」と窓の x。仕事が動いていれば確かめる（閉じても裏の仕事は最後まで続くが、結果の知らせは出せない）"""
+        if self.running and not messagebox.askokcancel(
+                "ToolKeeper", "仕事が動いています。\n\n閉じても仕事は裏で最後まで続きますが、出力と、"
+                "終わったときの知らせ（失敗や環境変数の書き換え）は見えなくなります。結果はあとで「履歴」のタブで見られます。\n\n"
+                "閉じますか", icon=messagebox.WARNING, parent=self.root):
+            return
+        self.close()
 
     def close(self) -> None:
         """予約した処理を取り消し、溜まっている描画を済ませてから閉じる（閉じたあとに走ると Tcl のエラーが出る）"""
@@ -215,8 +265,9 @@ class App:
             pass
         self._after = self.root.after(100, self._poll)
 
-    def run_command(self, label: str, argv: list[str], env: dict | None = None, out: tk.Text | None = None) -> None:
-        """コマンドを別のプロセスで動かし、出力を下の欄（既定は道具のタブの欄）に流す。終わったら読み直す"""
+    def run_command(self, label: str, argv: list[str], env: dict | None = None, out: tk.Text | None = None,
+                    after=None) -> None:
+        """コマンドを別のプロセスで動かし、出力を下の欄（既定は道具のタブの欄）に流す。終わったら読み直し、after(終了コード) を呼ぶ"""
         out = out or self.output
         if self.running:
             self.message.config(text="ほかの仕事が終わるまで待ってください")
@@ -263,6 +314,8 @@ class App:
                     5: "上げられなかった物があります"}.get(code, "失敗しました")
             self.message.config(text=f"{label}: {note}")
             self.reload()
+            if after:
+                after(code)
 
         self._run_in_background(work, done)
 
@@ -321,7 +374,7 @@ class App:
         table = ttk.Frame(tab)
         table.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         cols = [("pick", "選ぶ", 44), ("tier", "区分", 80), ("name", "名前", 300), ("installed", "入っている版", 120),
-                ("latest", "最新", 120), ("note", "注意", 300)]
+                ("latest", "最新", 120), ("date", "公開日", 90), ("note", "注意", 300)]
         self.tree = ttk.Treeview(table, columns=[c[0] for c in cols], show="headings", selectmode="none")
         for key, label, width in cols:
             self.tree.heading(key, text=label)
@@ -422,7 +475,18 @@ class App:
                                       + "\n".join(names), parent=self.root):
             return
         self.picked.clear()
-        self.run_command(f"{len(keys)} 件を更新", self.toolkeeper("update", *keys))
+        since = store.iso(store.now())
+        labels = dict(zip(keys, names))
+
+        def after(_code):
+            # 出力の欄は winget の進み具合で流れてしまい、失敗したことも理由も目に入らなかった（2026-10-29）。
+            # 成功しても、インストーラが環境変数を書き換えていれば知らせる
+            got = result_text(self.data / update.HISTORY_FILE, since, keys, labels)
+            if got:
+                text, failed = got
+                (messagebox.showerror if failed else messagebox.showwarning)("ToolKeeper", text, parent=self.root)
+
+        self.run_command(f"{len(keys)} 件を更新", self.toolkeeper("update", *keys), after=after)
 
     def register_task(self, unregister: bool) -> None:
         script = APP_DIR / "scripts" / "register-task.ps1"
@@ -614,12 +678,12 @@ class App:
         self.history_count.pack(side=tk.BOTTOM, anchor=tk.W, pady=(6, 0))
         table = ttk.Frame(tab)
         table.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-        cols = [("at", "時刻", 150), ("key", "キー", 300), ("from", "前", 120), ("to", "後", 120), ("ok", "結果", 60),
-                ("code", "終了コード", 110)]
+        cols = [("at", "時刻", 140), ("key", "キー", 230), ("from", "前", 100), ("to", "後", 100), ("ok", "結果", 50),
+                ("code", "終了コード", 100), ("reason", "理由", 400)]
         self.history = ttk.Treeview(table, columns=[c[0] for c in cols], show="headings", selectmode="browse")
         for key, label, width in cols:
             self.history.heading(key, text=label)
-            self.history.column(key, width=width, stretch=key == "key")
+            self.history.column(key, width=width, stretch=key == "reason")
         self.history.tag_configure("failed", foreground="#b00020")
         scroll = ttk.Scrollbar(table, orient=tk.VERTICAL, command=self.history.yview)
         scroll.pack(side=tk.RIGHT, fill=tk.Y)

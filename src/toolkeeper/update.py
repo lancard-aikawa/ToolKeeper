@@ -2,21 +2,25 @@
 
 人が画面で押したときか、`toolkeeper update` を手で打ったときだけ動く。定期の実行からは呼ばない。
 上げてよいのは check.json で区分が A・B の物だけ。1 つずつ順に動かす（winget は並べて動かせない）。
+1 つが失敗したらそこで止め、残りは動かさない（同じ理由で続けて失敗し、UAC の確認だけが続くのを避ける）。
 結果は <data>/history.jsonl に足す。
 """
 import codecs
+import re
 import shutil
 import subprocess
 import sys
 from pathlib import Path
 
-from . import check, cygwin, ghostscript, store, winget
+from . import check, cygwin, env, ghostscript, store, winget
 
 HISTORY_FILE = "history.jsonl"
 TAIL_LINES = 20
 # winget の終了コード（符号なし）。APPINSTALLER_CLI_ERROR_UPDATE_NOT_APPLICABLE（-1978335189）は
 # 「上げる物が無い」（ほかで先に上げた）なので失敗にしない
 NOT_APPLICABLE = {0x8A15002B}
+# 出力の最後の行の「…終了コードで失敗しました: 1603」の 1603（インストーラ自身の終了コード。文は言語で変わるので数だけ見る）
+_INNER_CODE = re.compile(r"[:：]\s*(\d{3,10})\s*$")
 
 
 class Refused(ValueError):
@@ -47,7 +51,9 @@ def plan(result: dict, keys: list[str]) -> list[dict]:
 
 
 def winget_args(winget_id: str) -> list[str]:
-    return ["winget", "upgrade", "--id", winget_id, "--exact", "--silent",
+    """--silent は付けない。MSI が /quiet になり、PC 全体に入れた古い版を消すときに UAC の確認を出せず 1603 で失敗する
+    （2026-10-29 OpenJDK 17・21。付けなければ /passive になり、確認が出て通った）"""
+    return ["winget", "upgrade", "--id", winget_id, "--exact",
             "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity"]
 
 
@@ -143,31 +149,79 @@ def _cygwin(it: dict, cfg: dict, data: Path, out, stream=_stream) -> tuple[int, 
     return code, tail
 
 
+def explain(code: int) -> str | None:
+    """終了コードの意味を `winget error` に聞く（Windows の言語の文）。分からなければ None"""
+    try:
+        r = subprocess.run(["winget", "error", f"0x{code:08X}"], capture_output=True, timeout=30,
+                           creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    lines = [x.strip() for x in r.stdout.decode("utf-8", errors="replace").splitlines() if x.strip()]
+    return lines[-1] if r.returncode == 0 and len(lines) >= 2 else None  # 1 行目はコードと名前
+
+
+def _reason(it: dict, code: int, tail: str, explain) -> str | None:
+    """失敗の理由。winget は出力が進み具合と「失敗しました」だけで、なぜかが分からない（2026-10-29 OpenJDK 17）ので、
+    winget の終了コードの意味と、出力の最後の行にインストーラの終了コードがあればその意味を引く。ほかは出力の最後の行"""
+    last = (tail or "").strip().splitlines()[-1:]
+    if _kind(it["key"]) != "winget":
+        return last[0] if last else None
+    parts = [f"winget: {explain(code) or '（意味を引けませんでした）'}"]
+    m = _INNER_CODE.search(last[0]) if last else None
+    if m:
+        inner = int(m.group(1))
+        parts.append(f"インストーラの終了コード {inner}: {explain(inner) or '（意味を引けませんでした）'}")
+    return "\n".join(parts)
+
+
 # 取得元ごとの上げ方。it, cfg, data, out → (終了コード, 出力の最後)
 RUNNERS = {"winget": _winget, "ghostscript": _ghostscript, "cygwin": _cygwin}
 
 
-def run(cfg: dict, data: Path, keys: list[str], out=None, runners: dict | None = None) -> list[dict]:
-    """選んだ物を順に上げ、1 件ずつの結果を返す。1 つが失敗しても残りは続ける"""
+def _read_env(read):
+    try:
+        return read()
+    except Exception:  # noqa: BLE001 (読めなくても上げるのは止めない。比べないだけ)
+        return None
+
+
+def run(cfg: dict, data: Path, keys: list[str], out=None, runners: dict | None = None, explain=explain,
+        read_env=env.read_registry) -> list[dict]:
+    """選んだ物を順に上げ、動かした物の結果を 1 件ずつ返す。1 つが失敗したら、そこで止める。
+    1 件ごとに前と後でレジストリの環境変数と PATH を比べ、変わっていれば env に入れる"""
     out = out or sys.stdout
     runners = runners or RUNNERS
     result = store.read_json(data / check.CHECK_FILE)
     if not result:
         raise Refused("まだ調べていません（toolkeeper check）")
     done = []
-    for it in plan(result, keys):
+    todo = plan(result, keys)
+    for n, it in enumerate(todo):
         out.write(f"\n== {it['name']} ({it['key']}) {it['installed']} -> {it['latest']}\n")
         out.flush()
+        before = _read_env(read_env)
         try:
             code, tail = runners[_kind(it["key"])](it, cfg, data, out)
-        except Exception as e:  # noqa: BLE001 (1 つが失敗しても残りは続ける)
+        except Exception as e:  # noqa: BLE001 (理由を履歴に残して止める)
             code, tail = 1, f"{type(e).__name__}: {e}"
             out.write(tail + "\n")
+        after = _read_env(read_env) if before is not None else None
+        changed = env.changes(before, after, cfg["env_vars"]) if after is not None else []
         ok = code == 0 or (_kind(it["key"]) == "winget" and code in NOT_APPLICABLE)
+        reason = None if ok else _reason(it, code, tail, explain)
         rec = {"at": store.iso(store.now()), "key": it["key"], "from": it["installed"], "to": it["latest"],
-               "ok": ok, "code": f"0x{code:08X}", "tail": None if code == 0 else tail}
+               "ok": ok, "code": f"0x{code:08X}", "reason": reason, "env": changed, "tail": None if code == 0 else tail}
         store.append_jsonl(data / HISTORY_FILE, rec)
         done.append(rec)
         out.write(f"-- {'済み' if ok else '失敗'}（終了コード {rec['code']}）\n")
+        if reason:
+            out.write("".join(f"   {x}\n" for x in reason.splitlines()))
+        if changed:
+            out.write("-- 環境変数が変わりました:\n" + "".join(f"   {env.change_text(c)}\n" for c in changed))
+        rest = todo[n + 1:]
+        if not ok and rest:
+            out.write(f"-- 失敗したので止めました。残りの {len(rest)} 件は動かしていません: {', '.join(r['name'] for r in rest)}\n")
+            out.flush()
+            break
         out.flush()
     return done

@@ -3,6 +3,7 @@
 取得元ごとに独立して動かす。1 つが失敗しても残りは出し、失敗した物は failed に理由を付けて出す。
 何かを入れる処理はここから呼ばない（§4）。
 """
+import re
 import subprocess
 from pathlib import Path
 
@@ -10,12 +11,14 @@ from . import __version__, choco, cygwin, env, eol, ghostscript, store, winget
 
 SCHEMA = 1
 CHECK_FILE = "check.json"
+DATES_FILE = "winget-dates.json"
 
 
 class Sources:
     """外とのやりとり。試験では差し替える"""
     winget_upgrades = staticmethod(winget.upgrades)
     winget_installed = staticmethod(winget.installed)
+    winget_date = staticmethod(winget.release_date)
     choco_available = staticmethod(choco.available)
     choco_outdated = staticmethod(choco.outdated)
     gs_installed = staticmethod(ghostscript.installed)
@@ -44,7 +47,23 @@ class Sources:
 
 def _item(key, tier, name, installed, latest, updatable, eol_=None, notes=None, **extra) -> dict:
     return {"key": key, "tier": tier, "name": name, "installed": installed, "latest": latest,
-            "updatable": updatable, "eol": eol_, "new": False, "notes": notes or [], **extra}
+            "updatable": updatable, "latest_date": None, "eol": eol_, "new": False, "notes": notes or [], **extra}
+
+
+def _same_release(a: str | None, b: str | None) -> bool:
+    """版の先頭 3 つの数が同じか（winget の "21.0.13.1021" と endoflife.date の "21.0.13.0.2" は同じ版）"""
+    ka, kb = ghostscript.vkey(a or "")[:3], ghostscript.vkey(b or "")[:3]
+    return len(ka) == 3 and ka == kb
+
+
+def _same_build(installed: str, available: str) -> bool:
+    """winget は更新ありと出すが、版の書き方が違うだけで同じ物か。Microsoft.OpenJDK は入れたあとの版が "21.0.13.21"、
+    winget の版が "21.0.13.1021" で、上げても更新ありのまま残る（2026-10-29、17 も同じ）。
+    4 つの数のうち先頭 3 つが同じで、最後の数が winget の最後の数の末尾と同じときだけ同じとみなす（"< 3.14.7" は版が分からないので違う）"""
+    if installed.lstrip().startswith("<"):
+        return False
+    a, b = re.findall(r"\d+", installed), re.findall(r"\d+", available)
+    return len(a) == 4 and len(b) == 4 and a[:3] == b[:3] and a[3] != b[3] and b[3].endswith(a[3])
 
 
 def _reason(e: Exception) -> str:
@@ -61,8 +80,9 @@ def _winget(cfg, src, lookup, items, failed):
     seen = set()
     for row in up["items"]:
         seen.add(row["id"])
+        same = _same_build(row["version"], row["available"])
         items.append(_item(f"winget:{row['id']}", "B" if row["id"] in update_ids else "C", row["name"],
-                           row["version"], row["available"], True))
+                           row["version"], row["available"], not same, notes=["same"] if same else None))
     if up["pinned"]:
         items.append(_item("winget:(pinned)", "C", "pin で止めた物", None, None, False, notes=[f"pinned:{up['pinned']}"]))
 
@@ -94,6 +114,8 @@ def _winget(cfg, src, lookup, items, failed):
             items.append(it)
             by_key[key] = it
         it["eol"] = {k: st[k] for k in ("product", "cycle", "date", "state")}
+        if it["updatable"] and _same_release(st["latest"], it["latest"]):
+            it["latest_date"] = st.get("latest_date")
         if st["state"] == "ended":
             it["tier"] = "E"
 
@@ -118,7 +140,8 @@ def _php(src, lookup, items, failed):
         failed.append({"source": "endoflife.date (php)", "reason": _reason(e)})
     latest = st["latest"] if st else None
     items.append(_item("php", "A", "PHP", version, latest, bool(latest and latest != version),
-                       {k: st[k] for k in ("product", "cycle", "date", "state")} if st else None, ["manual"]))
+                       {k: st[k] for k in ("product", "cycle", "date", "state")} if st else None, ["manual"],
+                       latest_date=st.get("latest_date") if st else None))
 
 
 def _ghostscript(cfg, src, cache, items, failed):
@@ -139,7 +162,8 @@ def _ghostscript(cfg, src, cache, items, failed):
         rel = None
     latest = rel["version"] if rel else None
     newer = bool(latest and ghostscript.vkey(latest) > ghostscript.vkey(have[-1]))
-    items.append(_item("ghostscript", "A", "Ghostscript", have[-1], latest, newer, notes=notes))
+    items.append(_item("ghostscript", "A", "Ghostscript", have[-1], latest, newer, notes=notes,
+                       latest_date=(rel.get("published") or "")[:10] or None if rel else None))
 
 
 def _cygwin(cfg, src, cache, items, failed):
@@ -178,6 +202,28 @@ def _choco(cfg, src, items, failed):
         items.append(_item(f"choco:{r['name']}", "D", r["name"], r["version"], r["available"], True, notes=notes))
 
 
+def _dates(src, cache, items) -> None:
+    """winget の更新版の公開日（§3.8）。winget show は 1 件に 1〜6 秒かかるので、B・E の更新できる物だけを引き、
+    ID と版の組ごとに cache に残して、次からは新しい版だけを引く。引けなくても照合は失敗にしない（「-」と出すだけ）"""
+    path = cache / DATES_FILE
+    known = store.read_json(path) or {}
+    kept = {}
+    for it in items:
+        if (not it["key"].startswith("winget:") or not it["updatable"] or it["tier"] not in ("B", "E")
+                or not it["latest"] or it["latest_date"]):
+            continue
+        k = f"{it['key'][len('winget:'):]}@{it['latest']}"
+        if k not in known:
+            try:
+                known[k] = src.winget_date(it["key"][len("winget:"):], it["latest"])
+            except Exception:  # noqa: BLE001 (次の照合でもう一度引く)
+                continue
+        kept[k] = known[k]
+        it["latest_date"] = known[k]
+    if kept != (store.read_json(path) or {}):
+        store.write_json(path, kept)
+
+
 def _env(cfg, src, data, t, failed) -> int:
     """環境変数と PATH（§3.7）。パスを含むので check.json には数だけを出し、中身は env.json に書く"""
     try:
@@ -203,6 +249,7 @@ def run(cfg: dict, data: Path, src: Sources | None = None) -> dict:
     _ghostscript(cfg, src, cache, items, failed)
     _cygwin(cfg, src, cache, items, failed)
     _choco(cfg, src, items, failed)
+    _dates(src, cache, items)
     env_count = _env(cfg, src, data, t, failed)
 
     prev = store.read_json(data / CHECK_FILE) or {}

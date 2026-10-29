@@ -23,6 +23,7 @@ def note_text(it: dict) -> str:
         kind, _, val = n.partition(":")
         parts.append({"manual": "手で入れた物（winget へ乗り換え）", "twin": f"winget でも見えている ({val.split(':', 1)[-1]})",
                       "old": f"古い版 {val} も入っている", "running": f"動いている: {val}",
+                      "same": "winget は更新ありと出すが、版の書き方が違うだけで最新",
                       "pinned": f"pin {val} 件" if val else "pin"}.get(kind, n))
     if it.get("packages"):
         parts.append(f"古いパッケージ {it['packages']['outdated']}/{it['packages']['installed']}")

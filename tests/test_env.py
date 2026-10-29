@@ -285,3 +285,36 @@ class Apply(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Changes(unittest.TestCase):
+    """更新の前後の違い（2026-10-29、OpenJDK 17 のインストーラが JAVA_HOME と PATH の先頭を 17 にした）"""
+    BEFORE = {"machine": {"JAVA_HOME": r"C:\jdk-21", "Path": r"C:\jdk-21\bin;C:\Windows;C:\Git\cmd"},
+              "user": {"Path": r"C:\Users\x\bin"}}
+
+    def test_same(self):
+        self.assertEqual(env.changes(self.BEFORE, self.BEFORE, ["JAVA_HOME"]), [])
+
+    def test_installer_takes_over(self):
+        after = {"machine": {"JAVA_HOME": r"C:\jdk-17", "Path": r"C:\jdk-17\bin;C:\jdk-21\bin;C:\Windows;C:\Git\cmd"},
+                 "user": {"Path": r"C:\Users\x\bin"}}
+        got = env.changes(self.BEFORE, after, ["JAVA_HOME"])
+        self.assertEqual(got, [
+            {"scope": "machine", "name": "JAVA_HOME", "old": r"C:\jdk-21", "new": r"C:\jdk-17"},
+            {"scope": "machine", "name": "PATH", "added": [r"C:\jdk-17\bin"], "removed": [], "moved": False,
+             "head": r"C:\jdk-17\bin"}])
+        self.assertEqual(env.change_text(got[1]), r"マシンの PATH: 先頭が C:\jdk-17\bin になった。足された C:\jdk-17\bin")
+
+    def test_removed_and_case_only(self):
+        after = {"machine": {"Path": r"c:\JDK-21\BIN;C:\Windows"}, "user": {"Path": r"C:\Users\x\bin"}}
+        got = env.changes(self.BEFORE, after, ["JAVA_HOME"])
+        self.assertEqual(got[0], {"scope": "machine", "name": "JAVA_HOME", "old": r"C:\jdk-21", "new": None})
+        self.assertEqual(got[1]["removed"], [r"C:\Git\cmd"])
+        self.assertEqual((got[1]["added"], got[1]["head"]), ([], None))  # 大文字小文字だけの違いは同じ行
+        self.assertEqual(env.change_text(got[0]), r"マシンの JAVA_HOME: C:\jdk-21 → （消えた）")
+
+    def test_order_only(self):
+        after = {"machine": {"JAVA_HOME": r"C:\jdk-21", "Path": r"C:\jdk-21\bin;C:\Git\cmd;C:\Windows"},
+                 "user": {"Path": r"C:\Users\x\bin"}}
+        got = env.changes(self.BEFORE, after, ["JAVA_HOME"])
+        self.assertEqual(env.change_text(got[0]), "マシンの PATH: 順番が変わった")

@@ -20,6 +20,31 @@ EXIT_BUSY = 3
 EXIT_PARTIAL = 4  # 調べられなかった取得元がある
 EXIT_FAILED = 5   # 上げられなかった物がある
 
+class _Unbroken:
+    """書く先が無くなっても（読む側が閉じた）例外を出さず、黙って捨てる出力"""
+
+    def __init__(self, stream):
+        self._stream, self._broken = stream, stream is None
+
+    def write(self, s: str) -> int:
+        if not self._broken:
+            try:
+                self._stream.write(s)
+            except (OSError, ValueError):
+                self._broken = True
+        return len(s)
+
+    def flush(self) -> None:
+        if not self._broken:
+            try:
+                self._stream.flush()
+            except (OSError, ValueError):
+                self._broken = True
+
+    def __getattr__(self, name):
+        return getattr(self._stream, name)
+
+
 def _build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser(prog="toolkeeper", description="PC に入れた道具が古くなっていないかを調べる")
     p.add_argument("--version", action="version", version=f"%(prog)s {__version__}")
@@ -62,7 +87,7 @@ def _print_table(result: dict, show_all: bool) -> None:
     for it in rows:
         mark = "*" if it["updatable"] and it["tier"] in ("A", "B") else " "
         print(f"{mark} {_fit(TIER_LABEL[it['tier']], 11)} {_fit(it['name'], 36)} {_fit(it['installed'] or '-', 16, True)} -> "
-              f"{_fit(it['latest'] or '-', 16)} {note_text(it)}")
+              f"{_fit(it['latest'] or '-', 16)} {_fit(it.get('latest_date') or '-', 10)} {note_text(it)}")
     hidden = len(result["items"]) - len(rows)
     if hidden:
         print(f"  (C・D の {hidden} 件は --all で出す)")
@@ -146,6 +171,9 @@ def _dispatch(args, cfg: dict, data: Path) -> int:
         _print_table(result, show_all=False)
         return EXIT_PARTIAL if result["failed"] else EXIT_OK
     if args.command == "update":
+        # 画面から呼ばれたとき、途中で画面を閉じると出力の先が無くなる。そこで止まると、入れかけのまま履歴も残らない
+        # （2026-10-29、OpenJDK 11 が OSError: [Errno 22] で落ちた）。書けなくても最後まで続ける
+        sys.stdout, sys.stderr = _Unbroken(sys.stdout), _Unbroken(sys.stderr)
         try:
             with store.exclusive(data):
                 done = updatemod.run(cfg, data, args.keys)
@@ -159,7 +187,15 @@ def _dispatch(args, cfg: dict, data: Path) -> int:
             print(e, file=sys.stderr)
             return EXIT_USAGE
         failed = [d["key"] for d in done if not d["ok"]]
-        print(f"\n済み {len(done) - len(failed)} 件、失敗 {len(failed)} 件" + (f": {', '.join(failed)}" if failed else ""))
+        skipped = len(args.keys) - len(done)
+        print(f"\n済み {len(done) - len(failed)} 件、失敗 {len(failed)} 件" + (f": {', '.join(failed)}" if failed else "")
+              + (f"、止めたので動かしていない物 {skipped} 件" if skipped else ""))
+        for d in done:
+            if d.get("reason"):
+                print(f"{d['key']} の理由:\n" + "".join(f"  {x}\n" for x in d["reason"].splitlines()), end="")
+            if d.get("env"):
+                print(f"{d['key']} で環境変数が変わりました（toolkeeper env で確かめる）:\n"
+                      + "".join(f"  {envmod.change_text(c)}\n" for c in d["env"]), end="")
         return EXIT_FAILED if failed else EXIT_OK
     if args.command == "list":
         result = store.read_json(data / check.CHECK_FILE)

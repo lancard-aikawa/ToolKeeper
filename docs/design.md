@@ -55,9 +55,16 @@ ToolKeeper は**この PC に入っている道具そのもの**の版を見る�
 - 表の後ろの「44 アップグレードを利用できます。」などの行は、列の数が合わないので捨てる。
   「pin があります」「版を判別できません」の行は件数だけを拾って画面に出す（言語に依らないよう、数字だけを見る）
 - 先頭に進み具合の記号（`\r`、`-\|/`）が混じることがあるので、`\r` より前を捨てる
+- winget が更新ありと出しても、版の書き方が違うだけで同じ物は `updatable` を `false` にし、`notes` に `same` を付ける。
+  Microsoft.OpenJDK は入れたあとの版が `21.0.13.21`、winget の版が `21.0.13.1021` で、上げても更新ありのまま残る（2026-10-29、17 も同じ）。
+  4 つの数のうち先頭 3 つが同じで、入っている版の最後の数が winget の最後の数の末尾と同じときだけ同じとみなす
+  （`11.0.24.8` と `11.0.24.9` は違う物、`< 3.14.7` は版が分からないので違う物）
 
-上げる: `winget upgrade --id <ID> --exact --silent --accept-package-agreements --accept-source-agreements --disable-interactivity`
+上げる: `winget upgrade --id <ID> --exact --accept-package-agreements --accept-source-agreements --disable-interactivity`
 
+- `--silent` は付けない。付けると MSI が `/quiet` になり、PC 全体に入れた古い版を消すとき（`msiexec /x`）に UAC の確認を出せず、
+  1603 で失敗する（2026-10-29、OpenJDK 17・21 の `0x8A150030`）。付けなければ `/passive` になり、インストーラの進み具合の窓と UAC の確認が出て通る。
+  古い版を消すときと新しい版を入れるときで、UAC の確認が 2 回出ることがある
 - machine 範囲で入れた物は、インストーラが自分で UAC を出す。ToolKeeper は管理者として動かない
 - 終了コードが 0 以外なら、出力の最後の 20 行を結果に残す
 
@@ -199,6 +206,24 @@ CLI の `--fix` / `--undo` は設定に関係なく使える（コマンドを�
 - `env-set.ps1` は 2026-10-29 に、試験用の HKCU のキー（`-TestKey`）で確かめた: 1 件だけの配列を読める、1 つでも値が違えば何も書かない、
   `REG_EXPAND_SZ` と `%SystemRoot%` と日本語のパスを保つ、無い変数は書かない
 
+### 3.8 更新版の公開日
+
+「最新」の版がいつ出たかを `latest_date`（`YYYY-MM-DD`）に入れる。分からなければ `null`（画面は「-」）。取り方は取得元で違う:
+
+| 取得元 | 取り方 |
+|---|---|
+| winget（B・E の更新できる物だけ） | まず §3.6 の endoflife.date の `latestReleaseDate`（その系列の最新版と、版の先頭 3 つの数が同じときだけ。`21.0.13.0.2` と `21.0.13.1021` は同じ）。無ければ `winget show --id <ID> --exact --version <最新>` |
+| 手で入れた PHP | endoflife.date の `latestReleaseDate` |
+| Ghostscript | GitHub の releases の `published_at` の日付 |
+| Cygwin・choco・winget の C | 取らない（Cygwin の版の一覧と choco には日付が無い。C は数が多く、見るだけなので引かない） |
+
+- `winget show` の「リリース日」は登録する人の任意の項目で、書いていない道具がある（2026-10-29 の時点で Microsoft.OpenJDK.21・OpenJS.NodeJS.20）
+- 見出しの語は言語で変わる（「リリース日」「Release Date」）ので使わない。字下げの無い行で塊に分け、`SHA256` の行がある塊（インストーラー）の中の、
+  値が日付だけの行を拾う。日付の行も字下げされている。リリースノートや説明の中の日付は拾わない
+- `winget show` は 1 件に 1〜6 秒かかる。引いた結果は `<data>/cache/winget-dates.json`（`{"<ID>@<版>": "日付" か null}`）に残し、次からは新しい版だけを引く。
+  載っていなかった（`null`）ことも残す。今回の照合で使わなかった組は消す
+- 引けなかった（winget が失敗した）ときは `null` にするだけで、`failed` には入れない（照合の失敗にしない）。cache にも残さず、次の照合でもう一度引く
+
 ## 4. 守ること
 
 - **定期の実行（タスク）は調べるだけで、何も入れない。**入れるのは、人が画面で押したときか、`toolkeeper update` を手で打ったときだけ
@@ -223,11 +248,24 @@ toolkeeper gui              # 画面
 
 - `check` は道具ごとに独立して動かす。1 つが失敗しても（ネットが無い、Cygwin が無いなど）残りは出し、失敗した物は理由を付けて出す
 - `update` は 1 つずつ順に動かす（winget は並べて動かせない）。結果を `<data>/history.jsonl` に足す
-  （`{at, key, from, to, ok, code, tail}`。`code` は `0x8A15002B` の形、`tail` は失敗したときの出力の最後の 20 行）
+  （`{at, key, from, to, ok, code, reason, env, tail}`。`code` は `0x8A15002B` の形、`tail` は失敗したときの出力の最後の 20 行）
+  - `env` は、その 1 件の前と後で、レジストリの環境変数（設定の `env_vars`）と PATH（マシン・ユーザー）が変わった所。
+    インストーラが自分向けに書き換えることがある（2026-10-29、OpenJDK 17 を上げたら `JAVA_HOME` が 21 から 17 になり、PATH の先頭に 17 が入った。
+    古い版を上げただけで、普段使う版が変わった）。変数は `{scope, name, old, new}`、PATH は `{scope, name: "PATH", added, removed, moved, head}`。
+    成功でも失敗でも、変わっていれば出力に「環境変数が変わりました」と出す。レジストリを読めなければ比べない（上げるのは止めない）
+  - 画面から呼ばれて途中で画面を閉じられても、出力を書けないことでは止まらない（書けない出力は捨てて最後まで続ける。
+    2026-10-29、画面を閉じたら OpenJDK 11 が `OSError: [Errno 22]` で落ちた）
+  - `reason` は失敗の理由（成功は `null`。後から足したので、無い記録は `tail` の最後の行を使う）。winget は出力が進み具合と
+    「…終了コードで失敗しました: 1603」だけで、なぜかが分からない（2026-10-29 OpenJDK 17）。そこで `winget error <コード>` で
+    winget の終了コードの意味を引き、出力の最後の行の末尾に数（インストーラ自身の終了コード。文は言語で変わるので数だけ見る）があれば、
+    それも `winget error` で引く。例: `winget: アンインストール コマンドの実行に失敗しました` / `インストーラの終了コード 1603: Fatal error during installation.`。
+    winget 以外は `tail` の最後の行
   - 上げてよいのは `check.json` で区分が A・B、`updatable` の物だけ。1 つでも外れた物を選んだら、どれも動かさずに理由を出して止める
   - 手で入れた PHP（`php`）は選べない。§7 の乗り換えを案内する
   - winget の `0x8A15002B`（上げる物が無い。ほかで先に上げた）は失敗にしない
-  - 1 つが失敗しても残りは続ける。終わったら `check` をもう一度流して `check.json` を今の状態にする（`--no-check` で流さない）
+  - 1 つが失敗したらそこで止め、残りは動かさない（「残りの N 件は動かしていません: 名前」と出す。履歴にも足さない）。
+    同じ理由で続けて失敗し、UAC の確認だけが続くことがある（2026-10-29、OpenJDK 17 が失敗したあとも 21 に進んだ）。
+    終わったら `check` をもう一度流して `check.json` を今の状態にする（`--no-check` で流さない）
 - `check` と `update` は `<data>/lock` で排他する。取れなければ終了コード 3
 - 終了コード: 0 成功、2 使い方の誤り・上げられない物を選んだ、3 実行中、4 調べられなかった取得元がある（`check`）、5 上げられなかった物がある（`update`）
 - タスクスケジューラ: `scripts/register-task.ps1` が「ToolKeeper check」を登録する（既定は毎週月曜 9:00。逃したら次に動ける時。ネットが無ければ動かない。30 分で打ち切り）。
@@ -281,7 +319,7 @@ tkinter。LockWatch と同じ決まり（絵文字を使わない、下のボタ
 
 - 上のボタン: 「選んだものを更新」「調べ直す」「定期実行を登録」「定期実行を解除」「前回のログを開く」。右に「C・D も出す」
 - その下に `check.json` のまとめ（調べた時刻・更新できる数・サポート終了・新しい・調べられなかった取得元）と、`status` の中身（定期実行・winget・choco・Cygwin・Ghostscript・データの場所）
-- 1 つの表に並べる: 選ぶ・区分・名前・入っている版・最新・注意（サポート終了、choco と二重、pin の件数、手で入れた PHP など）。既定では C・D を隠す（サポート終了の物は出す）
+- 1 つの表に並べる: 選ぶ・区分・名前・入っている版・最新・公開日（§3.8。分からなければ「-」）・注意（サポート終了、choco と二重、pin の件数、手で入れた PHP など）。既定では C・D を隠す（サポート終了の物は出す）
 - 押せる行は、区分が A・B で新しい版がある物だけ（手で入れた PHP は §7 の乗り換えが先なので押せない）。
   押せる行には `[ ]` の札を付け、マウスを乗せると行の色が変わり、指のカーソルになる。押すと `[x]` になり、行を黄色で塗って太字にする。
   表の上に「選んでいる物（件数）: 名前、…」を出す（`[x]` の札だけでは、ほかの `[ ]` と見分けられず、何を選んだか分からなかった。2026-10-29）。
@@ -292,6 +330,12 @@ tkinter。LockWatch と同じ決まり（絵文字を使わない、下のボタ
   `toolkeeper update <キー>...` を別のプロセスで呼ぶ
 - 動かした仕事の出力は下の欄に流す。winget の進み具合（`\r` で上書きされる行）は下のステータス行に出す
 - 仕事が動いている間は、ボタンを押せない状態にする
+- 更新が失敗で終わったら、エラーの窓を出す: 上げられなかった物と終了コード、`reason`、止めたので動かしていない物の名前
+  （出力の欄は winget の進み具合で流れ、失敗したことも理由も目に入らなかった。2026-10-29）
+- 成功でも失敗でも、インストーラが環境変数を書き換えていれば（履歴の `env`）、窓にその中身と「環境のタブで確かめる」を出す
+  （失敗があればエラーの窓、無ければ注意の窓）
+- 仕事が動いている間に「閉じる」か窓の x を押したら、「閉じても仕事は裏で最後まで続くが、出力と終わったときの知らせは見えなくなる。
+  結果は履歴のタブで見られる」と出して確かめる
 
 環境のタブ: §3.7 の結果を表に（選ぶ・状態・種類・範囲（マシン・ユーザー）・名前・値・説明・直し方）。開いたときと「読み直す」で、レジストリから読み直す（速いので CLI を挟まない）。
 
@@ -308,7 +352,7 @@ tkinter。LockWatch と同じ決まり（絵文字を使わない、下のボタ
   `toolkeeper env --fix` / `--undo` を別のプロセスで呼ぶ。出力はタブの下の欄に流す
 - 上に「マシンの変数は UAC が出る。新しく開いたプログラムにだけ届く。開いたままのターミナルや VS Code は開き直す」と書く
 
-履歴のタブ: `history.jsonl` を新しい順に（時刻・キー・前・後・結果・終了コード）。失敗した行は赤。
+履歴のタブ: `history.jsonl` を新しい順に（時刻・キー・前・後・結果・終了コード・理由）。失敗した行は赤。理由の複数の行は ` / ` でつなぐ。
 
 ## 9. RepoTether との受け渡し
 
@@ -341,9 +385,9 @@ RepoTether（`../RepoTether`）の「脆弱性」タブの隣に「道具」タ�
   "summary": {"updatable": 17, "eol": 2, "new": 3, "failed": 1},
   "items": [
     {"key": "winget:Gyan.FFmpeg", "tier": "B", "name": "FFmpeg", "installed": "8.1", "latest": "9.0.2",
-     "updatable": true, "eol": null, "new": true, "notes": []},
+     "updatable": true, "latest_date": "2026-09-20", "eol": null, "new": true, "notes": []},
     {"key": "winget:OpenJS.NodeJS.20", "tier": "E", "name": "Node.js", "installed": "20.9.0", "latest": "20.20.2",
-     "updatable": true, "eol": {"product": "nodejs", "cycle": "20", "date": "2026-04-30", "state": "ended"}, "new": false, "notes": []},
+     "updatable": true, "latest_date": "2026-03-24", "eol": {"product": "nodejs", "cycle": "20", "date": "2026-04-30", "state": "ended"}, "new": false, "notes": []},
     {"key": "cygwin", "tier": "A", "name": "Cygwin", "installed": "3.6.0-1", "latest": "3.6.12-1",
      "updatable": true, "eol": null, "new": false, "notes": ["running:mintty.exe"],
      "packages": {"installed": 77, "outdated": 38, "names": ["bash", "cygwin"]}},
@@ -362,10 +406,12 @@ RepoTether（`../RepoTether`）の「脆弱性」タブの隣に「道具」タ�
 - `updatable` は新しい版があるか。`summary.updatable` は `tier` が A・B で `updatable` の物の数。
   Cygwin は本体の版が同じでもパッケージが古ければ `true`（`packages` に数と、古い物の名前を 50 個まで）
 - `installed`・`latest` は winget などが出したままの文字（`< 3.14.7`、`7.1.9 (48550)` もある）。大小は比べない
+- `latest_date` は `latest` の版の公開日（§3.8）。分からなければ `null`。後から足したので、無ければ `null` とみなす
 - `eol.state` は `ended`（終了）・`soon`（90 日以内）・`ok`。分からなければ `eol` が `null`
 - `new` は前回の `check` に無かった更新（同じ `key` で `latest` が変わったものも含む）。初めての `check` では全部 `false`
 - `notes` は短い印の並び: `twin:<key>`（choco と winget で二重）、`pinned`（choco の pin）、`pinned:<件数>`（winget の pin。`key` が `winget:(pinned)` の行）、
-  `running:<名前>`（Cygwin のプロセスが動いている）、`manual`（手で入れた PHP。§7 の乗り換え）、`old:<版>`（Ghostscript の古い版も入っている）
+  `running:<名前>`（Cygwin のプロセスが動いている）、`manual`（手で入れた PHP。§7 の乗り換え）、`old:<版>`（Ghostscript の古い版も入っている）、
+  `same`（winget は更新ありと出すが、版の書き方が違うだけで同じ物。§3.1。`updatable` は `false`）
 - `failed` は調べられなかった取得元と理由。1 つが失敗しても `items` は残りの分を出す
 - `summary.env` は環境変数と PATH（§3.7）で「切れている」と注意の数（後から足したので、無ければ 0 とみなす）。中身は `<data>/env.json`（パスを含むので RepoTether には渡さない）
 - 手元のパスは入れない（RepoTether が画面の画像を撮ることがあるため。場所は `status` で返す）

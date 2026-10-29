@@ -51,7 +51,13 @@ class Rows(unittest.TestCase):
         self.assertEqual(values["cygwin"][0], gui.PICK_ON)
         self.assertEqual(values["winget:Gyan.FFmpeg"][0], gui.PICK_OFF)
         self.assertEqual(values["choco:gh"][0], "")  # 押せない行には札を付けない
-        self.assertIn("winget でも見えている", values["choco:gh"][5])
+        self.assertIn("winget でも見えている", values["choco:gh"][6])
+
+    def test_release_date(self):
+        result = {"items": [dict(RESULT["items"][0], latest_date="2026-09-20"), dict(RESULT["items"][1])]}
+        result["items"][1].pop("latest_date", None)  # 前の check.json には無い
+        values = [v for _k, v, _p in gui.table_rows(result, True, set())]
+        self.assertEqual([v[5] for v in values], ["2026-09-20", "-"])
 
     def test_no_result(self):
         self.assertEqual(gui.table_rows(None, True, set()), [])
@@ -108,6 +114,50 @@ class History(unittest.TestCase):
         self.assertEqual(rows[0][4], "失敗")
         self.assertEqual(rows[1][0], "2026-10-28 18:06:04")
 
+    def write(self, d, recs):
+        p = Path(d) / update.HISTORY_FILE
+        p.write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in recs), encoding="utf-8")
+        return p
+
+    FAILED = {"at": "2026-10-29T18:37:26+09:00", "key": "winget:Microsoft.OpenJDK.17", "ok": False, "code": "0x8A150030",
+              "reason": "winget: アンインストール コマンドの実行に失敗しました\nインストーラの終了コード 1603: Fatal error during installation.",
+              "tail": "アンインストールは次の終了コードで失敗しました: 1603"}
+
+    def test_reason_column(self):
+        old = {"at": "2026-10-28T18:46:43+09:00", "key": "ghostscript", "ok": False, "code": "0x00000001",
+               "tail": "取っています\n署名が Artifex の有効な物ではありません"}  # reason が無い前の記録
+        with tempfile.TemporaryDirectory() as d:
+            rows = gui.history_rows(self.write(d, [old, self.FAILED]))
+        self.assertEqual(rows[0][6], "winget: アンインストール コマンドの実行に失敗しました / "
+                                     "インストーラの終了コード 1603: Fatal error during installation.")
+        self.assertEqual(rows[1][6], "署名が Artifex の有効な物ではありません")
+
+    def test_failure_text(self):
+        keys = ["winget:Microsoft.OpenJDK.17", "winget:Microsoft.OpenJDK.21"]
+        names = {keys[0]: "OpenJDK 17", keys[1]: "OpenJDK 21"}
+        before = dict(self.FAILED, at="2026-10-29T10:00:00+09:00", key=keys[1])  # 前の回の失敗は出さない
+        with tempfile.TemporaryDirectory() as d:
+            p = self.write(d, [before, self.FAILED])
+            text, failed = gui.result_text(p, "2026-10-29T18:35:21+09:00", keys, names)
+            ok = gui.result_text(self.write(d, [dict(self.FAILED, ok=True)]), "2026-10-29T18:35:21+09:00", keys, names)
+        self.assertTrue(failed)
+        self.assertIn("OpenJDK 17 を上げられませんでした（終了コード 0x8A150030）", text)
+        self.assertIn("インストーラの終了コード 1603", text)
+        self.assertIn("失敗したので、次の物は動かしていません:\n  OpenJDK 21", text)
+        self.assertIsNone(ok)
+
+    def test_env_change_is_reported_even_when_ok(self):
+        """成功しても、インストーラが JAVA_HOME を書き換えていれば知らせる（2026-10-29 OpenJDK 17）"""
+        rec = dict(self.FAILED, ok=True, reason=None, env=[
+            {"scope": "machine", "name": "JAVA_HOME", "old": r"C:\jdk-21\\", "new": r"C:\jdk-17\\"}])
+        with tempfile.TemporaryDirectory() as d:
+            text, failed = gui.result_text(self.write(d, [rec]), "2026-10-29T18:35:21+09:00",
+                                           ["winget:Microsoft.OpenJDK.17"], {"winget:Microsoft.OpenJDK.17": "OpenJDK 17"})
+        self.assertFalse(failed)
+        self.assertTrue(text.startswith("OpenJDK 17 のインストーラが環境変数を書き換えました:\n"
+                                        "  マシンの JAVA_HOME: C:\\jdk-21\\\\ → C:\\jdk-17\\\\"))
+        self.assertIn("「環境」のタブ", text)
+
 
 class WindowBase(unittest.TestCase):
     """窓を作る（画面には出さない）。CONFIG に設定を書くと、その設定で開く"""
@@ -146,6 +196,20 @@ class WindowBase(unittest.TestCase):
 
 class Window(WindowBase):
     """道具のタブ: 選ぶ・押せない行は押せない・閉じる、までを通す。環境のタブは既定（見るだけ）"""
+
+    def test_close_while_running_asks(self):
+        """仕事が動いている間に閉じようとしたら確かめる（2026-10-29、閉じたら裏の更新が落ちた）"""
+        self.app.running = True
+        with mock.patch.object(gui.messagebox, "askokcancel", return_value=False) as ask, \
+                mock.patch.object(self.app, "close") as close:
+            self.app.ask_close()
+        ask.assert_called_once()
+        close.assert_not_called()
+        self.app.running = False
+        with mock.patch.object(gui.messagebox, "askokcancel") as ask, mock.patch.object(self.app, "close") as close:
+            self.app.ask_close()
+        ask.assert_not_called()
+        close.assert_called_once()
 
     def wait_env(self):
         for _ in range(100):  # 裏のスレッドの結果は _poll（100 ms ごと）で受け取る

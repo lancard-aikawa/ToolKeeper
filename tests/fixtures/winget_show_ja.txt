@@ -1,0 +1,33 @@
+見つかりました FFmpeg [Gyan.FFmpeg]
+バージョン: 9.0.2
+公開元: Gyan
+発行元 URL: https://www.gyan.dev/
+発行元のサポート URL: https://www.gyan.dev/ffmpeg/builds/#discussion
+作成者: Gyan Doshi
+モニカー: ffmpeg
+説明:
+  FFmpeg is the leading multimedia framework, able to decode, encode, transcode, mux, demux, stream, filter and play pretty much anything that humans and machines have created. It supports the most obscure ancient formats up to the cutting edge.
+  
+  FFmpeg 64-bit static full build from www.gyan.dev. Contains most libraries.
+ホーム ページ: https://www.gyan.dev/ffmpeg/builds/
+ライセンス: GPL-3.0
+ライセンス URL: https://www.ffmpeg.org/legal.html
+著作権: Copyright (c) 2000-2026 the FFmpeg developers
+リリース ノート:
+  Update for 9.0.2
+  Fixed: 2025-01-01
+   fftools: reject negative -t durations
+リリース ノート URL: https://raw.githubusercontent.com/FFmpeg/FFmpeg/release/9.0/Changelog
+Documentation:
+  Documentation: https://ffmpeg.org/documentation.html
+  About: https://www.gyan.dev/ffmpeg/builds/#about-these-builds
+  GitHub Issues: https://github.com/GyanD/codexffmpeg/issues
+タグ:
+  ffmpeg
+  video
+インストーラー:
+  インストーラーの種類: portable (zip)
+  インストーラーの URL: https://github.com/GyanD/codexffmpeg/releases/download/9.0.2/ffmpeg-9.0.2-full_build.zip
+  インストーラーの SHA256: 759d0a9831c436a0eb331ad36f236c06cb04aaa0005da46571f0e9d3d9206f6b
+  リリース日: 2026-09-20
+  オフライン配信をサポート: true

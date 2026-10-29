@@ -12,6 +12,7 @@ COMMON = ["--accept-source-agreements", "--disable-interactivity"]
 TIMEOUT = 300
 COLUMNS = ("name", "id", "version", "available", "source")
 _DASHES = re.compile(r"^-{10,}$")
+_DATE = re.compile(r"^\s+[^:]+:\s*(\d{4}-\d{2}-\d{2})$")
 
 
 def width(s: str) -> int:
@@ -76,6 +77,25 @@ def parse(text: str) -> dict:
     return {"items": items, "unknown": unknown, "pinned": pinned}
 
 
+def parse_release_date(text: str) -> str | None:
+    """winget show の出力 → その版の公開日（"2026-09-20"）。載っていなければ None（任意の項目で、書いていない道具がある）
+
+    見出しの語（「リリース日」「Release Date」）は言語で変わるので使わない。字下げの無い行で塊に分け、
+    SHA256 の行がある塊（インストーラー）の中から、値が日付だけの行を拾う（リリースノートの中の日付を拾わないため）"""
+    blocks: list[list[str]] = [[]]
+    for line in (_clean(x) for x in text.replace("\r\n", "\n").split("\n")):
+        if line and not line[0].isspace():
+            blocks.append([])
+        blocks[-1].append(line)
+    for block in blocks:
+        if any("SHA256" in line for line in block):
+            for line in block:
+                m = _DATE.match(line)
+                if m:
+                    return m.group(1)
+    return None
+
+
 def _run(args: list[str]) -> str:
     r = subprocess.run(["winget", *args], capture_output=True, timeout=TIMEOUT,
                        creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
@@ -94,6 +114,15 @@ def upgrades() -> dict:
 def installed() -> dict:
     """winget の取得元で見つかる、入っている物全部（サポート終了を見るのに使う。pin で止めた物も「利用可能」が出る）"""
     return parse(_run(["list", "--source", "winget", *COMMON]))
+
+
+def release_date(winget_id: str, version: str) -> str | None:
+    """その版の公開日。1 件に 1〜6 秒かかる"""
+    r = subprocess.run(["winget", "show", "--id", winget_id, "--exact", "--version", version, *COMMON],
+                       capture_output=True, timeout=120, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    if r.returncode != 0:
+        raise RuntimeError(f"winget show {winget_id} が失敗しました（終了コード {r.returncode}）")
+    return parse_release_date(r.stdout.decode("utf-8", errors="replace"))
 
 
 def version() -> str | None:

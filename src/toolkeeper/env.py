@@ -381,3 +381,45 @@ def undo_plan(data: Path) -> dict:
     return {"scope": h["scope"], "name": h["name"], "old": h["new"], "new": h["old"],
             "changes": [f"{h['name']}（{SCOPE_NAME[h['scope']]}）を {h['at'][:16].replace('T', ' ')} の変更の前に戻す"],
             "undo_of": {"at": h["at"], "scope": h["scope"], "name": h["name"]}}
+
+
+def changes(before: dict, after: dict, var_names: list[str]) -> list[dict]:
+    """レジストリの値の、前と後の違い（更新の前後に比べる。§5）。インストーラが JAVA_HOME と PATH を自分向けに書き換えることがある
+    （2026-10-29、OpenJDK 17 を上げたら JAVA_HOME が 21 から 17 になり、PATH の先頭に 17 が入った）。
+    変数は {scope, name, old, new}。PATH は {scope, name: "PATH", added, removed, moved, head}（moved は残った行の順番が変わったか、
+    head は先頭の行が変わったときの新しい先頭）"""
+    out = []
+    for scope in SCOPES:
+        b, a = before.get(scope, {}), after.get(scope, {})
+        for name in var_names:
+            old, new = _get(b, name), _get(a, name)
+            if old != new:
+                out.append({"scope": scope, "name": _real_name(a if new is not None else b, name), "old": old, "new": new})
+        old_rows = [x for x in (_get(b, "Path") or "").split(";") if x.strip()]
+        new_rows = [x for x in (_get(a, "Path") or "").split(";") if x.strip()]
+        if [norm(x) for x in old_rows] == [norm(x) for x in new_rows]:
+            continue
+        old_set, new_set = {norm(x) for x in old_rows}, {norm(x) for x in new_rows}
+        kept_old = [norm(x) for x in old_rows if norm(x) in new_set]
+        kept_new = [norm(x) for x in new_rows if norm(x) in old_set]
+        head = new_rows[0] if new_rows and (not old_rows or norm(new_rows[0]) != norm(old_rows[0])) else None
+        out.append({"scope": scope, "name": "PATH", "added": [x for x in new_rows if norm(x) not in old_set],
+                    "removed": [x for x in old_rows if norm(x) not in new_set], "moved": kept_old != kept_new, "head": head})
+    return out
+
+
+def change_text(c: dict) -> str:
+    """changes() の 1 件を人に見せる 1 行に"""
+    where = f"{SCOPE_NAME[c['scope']]}の {c['name']}"
+    if c["name"] != "PATH":
+        return f"{where}: {c['old'] or '（無し）'} → {c['new'] or '（消えた）'}"
+    parts = []
+    if c["head"]:
+        parts.append(f"先頭が {c['head']} になった")
+    if c["added"]:
+        parts.append("足された " + "、".join(c["added"]))
+    if c["removed"]:
+        parts.append("消えた " + "、".join(c["removed"]))
+    if c["moved"] and not c["head"]:
+        parts.append("順番が変わった")
+    return f"{where}: " + "。".join(parts)

@@ -30,6 +30,7 @@ class Fake(check.Sources):
     def __init__(self, **over):
         self.over = over
         self.cyg_root_seen = None
+        self.date_calls = []
 
     def winget_upgrades(self):
         if "winget" in self.over:
@@ -38,6 +39,12 @@ class Fake(check.Sources):
 
     def winget_installed(self):
         return winget.parse(fixture("winget_list.txt"))
+
+    def winget_date(self, winget_id, version):
+        self.date_calls.append(winget_id)
+        if "date" in self.over:
+            raise self.over["date"]
+        return "2026-09-20" if winget_id == "Gyan.FFmpeg" else None
 
     def choco_available(self):
         return True
@@ -94,7 +101,8 @@ class Run(unittest.TestCase):
         self.tmp.cleanup()
 
     def run_check(self, **over):
-        return check.run(self.cfg, self.data, Fake(**over))
+        self.src = Fake(**over)
+        return check.run(self.cfg, self.data, self.src)
 
     def by_key(self, result):
         return {it["key"]: it for it in result["items"]}
@@ -190,6 +198,49 @@ class Run(unittest.TestCase):
         self.assertEqual(sorted(it["key"] for it in r["items"] if it["new"]), ["ghostscript", "winget:Gyan.FFmpeg"])
         self.assertEqual(r["summary"]["new"], 2)
 
+    def test_release_dates(self):
+        items = self.by_key(self.run_check())
+        dates = {k: it["latest_date"] for k, it in items.items()}
+        self.assertEqual(dates["winget:Gyan.FFmpeg"], "2026-09-20")      # winget show
+        self.assertEqual(dates["winget:OpenJS.NodeJS.20"], "2026-03-24")  # endoflife.date（版が同じ）
+        self.assertEqual(dates["ghostscript"], "2026-09-08")              # GitHub の公開日
+        self.assertEqual(dates["php"], "2026-10-21")
+        self.assertIsNone(dates["winget:GitHub.cli"])                     # winget に載っていない
+        self.assertIsNone(dates["cygwin"])
+        self.assertIsNone(dates["choco:gh"])
+        # 引くのは B・E の更新できる物だけ。endoflife.date で分かった物は引かない
+        self.assertEqual(sorted(self.src.date_calls),
+                         ["7zip.7zip", "GitHub.cli", "Gyan.FFmpeg", "Microsoft.OpenJDK.17", "Python.Launcher"])
+
+    def test_eol_date_needs_same_release(self):
+        self.assertTrue(check._same_release("21.0.13.0.2", "21.0.13.1021"))
+        self.assertFalse(check._same_release("3.14.10", "3.14.7"))
+        self.assertFalse(check._same_release("24", "24"))
+        self.assertFalse(check._same_release(None, "1.2.3"))
+
+    def test_release_dates_are_cached(self):
+        self.run_check()
+        cache = json.loads((self.data / "cache" / check.DATES_FILE).read_text(encoding="utf-8"))
+        self.assertEqual(cache["Gyan.FFmpeg@9.0.2"], "2026-09-20")
+        self.assertIsNone(cache["GitHub.cli@2.103.3"])  # 載っていないことも覚えておく
+        r = self.run_check()
+        self.assertEqual(self.src.date_calls, [])
+        self.assertEqual(self.by_key(r)["winget:Gyan.FFmpeg"]["latest_date"], "2026-09-20")
+
+    def test_old_versions_leave_the_cache(self):
+        path = self.data / "cache" / check.DATES_FILE
+        path.parent.mkdir(parents=True)
+        path.write_text(json.dumps({"Gyan.FFmpeg@9.0.1": "2026-08-01"}), encoding="utf-8")
+        self.run_check()
+        self.assertNotIn("Gyan.FFmpeg@9.0.1", json.loads(path.read_text(encoding="utf-8")))
+
+    def test_release_date_failure_is_not_a_failure(self):
+        r = self.run_check(date=RuntimeError("winget show が失敗しました"))
+        self.assertEqual(r["failed"], [])
+        self.assertIsNone(self.by_key(r)["winget:Gyan.FFmpeg"]["latest_date"])
+        self.run_check()  # 失敗した物は覚えず、次にもう一度引く
+        self.assertIn("Gyan.FFmpeg", self.src.date_calls)
+
     def test_env_goes_to_env_json(self):
         """パスを含むので check.json には数だけ（§3.7）"""
         self.run_check()
@@ -212,3 +263,29 @@ class Run(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class SameBuild(unittest.TestCase):
+    def test_openjdk_notation(self):
+        """Microsoft.OpenJDK は入れたあとも 21.0.13.21 → 21.0.13.1021 と更新ありに出る（2026-10-29）"""
+        self.assertTrue(check._same_build("21.0.13.21", "21.0.13.1021"))
+        self.assertTrue(check._same_build("17.0.21.21", "17.0.21.1021"))
+
+    def test_real_updates(self):
+        for installed, available in [("21.0.9.10", "21.0.13.1021"), ("11.0.24.8", "11.0.24.9"), ("< 3.14.7", "3.14.7"),
+                                     ("3.14.0", "3.14.7"), ("12.0.21005.1", "12.0.40664.0"), ("26.2.3.2", "26.8.1.1")]:
+            with self.subTest(installed):
+                self.assertFalse(check._same_build(installed, available))
+
+    def test_item_is_not_updatable(self):
+        class Same(Fake):
+            def winget_upgrades(self):
+                up = super().winget_upgrades()
+                for r in up["items"]:
+                    if r["id"] == "Gyan.FFmpeg":
+                        r["version"], r["available"] = "21.0.13.21", "21.0.13.1021"
+                return up
+        with tempfile.TemporaryDirectory() as d:
+            cfg = copy.deepcopy(DEFAULTS)
+            it = {i["key"]: i for i in check.run(cfg, Path(d), Same())["items"]}["winget:Gyan.FFmpeg"]
+        self.assertEqual((it["updatable"], it["notes"], it["latest_date"]), (False, ["same"], None))

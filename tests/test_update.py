@@ -22,6 +22,8 @@ RESULT = {"schema": 1, "items": [
     item("php", tier="A"), item("ghostscript", tier="A"),
 ]}
 CFG = copy.deepcopy(DEFAULTS)
+# winget error の代わり（2026-10-29 に winget error で引いた文）
+EXPLAIN = {0x8A150030: "アンインストール コマンドの実行に失敗しました", 1603: "Fatal error during installation."}
 
 
 class Plan(unittest.TestCase):
@@ -60,38 +62,86 @@ class Run(unittest.TestCase):
             self.calls.append(args)
             code = codes[len(self.calls) - 1]
             out.write("installing...\r\n")
-            return code, "" if code == 0 else "インストーラーが失敗しました"
+            # 2026-10-29 に OpenJDK 17 で出た、最後の 2 行
+            return code, "" if code == 0 else "パッケージのアンインストールを開始しています...\nアンインストールは次の終了コードで失敗しました: 1603"
 
         def gs(it, cfg, data, out):
             raise RuntimeError("SHA-256 が合いません")
         return {"winget": lambda it, cfg, data, out: update._winget(it, cfg, data, out, stream), "ghostscript": gs}
 
-    def test_runs_in_order_and_keeps_going(self):
-        out = io.StringIO()
-        done = update.run(CFG, self.data, ["winget:Gyan.FFmpeg", "winget:7zip.7zip"], out, self.runners([0x8A150011, 0]))
+    def run_update(self, keys, codes, out=None, regs=None, explain=EXPLAIN.get):
+        """regs はレジストリを読むたびに返す値の並び（無ければ毎回同じ値）"""
+        regs = list(regs or [])
+        same = {"machine": {"Path": r"C:\Windows"}, "user": {}}
+        return update.run(CFG, self.data, keys, out or io.StringIO(), self.runners(codes), explain=explain,
+                          read_env=lambda: regs.pop(0) if regs else same)
+
+    def test_runs_in_order(self):
+        done = self.run_update(["winget:Gyan.FFmpeg", "winget:7zip.7zip"], [0, 0])
         self.assertEqual([c[3] for c in self.calls], ["Gyan.FFmpeg", "7zip.7zip"])
         self.assertIn("--exact", self.calls[0])
         self.assertNotIn("--include-pinned", self.calls[0])
-        self.assertEqual([d["ok"] for d in done], [False, True])
-        self.assertEqual(done[0]["code"], "0x8A150011")
-        self.assertEqual(done[0]["tail"], "インストーラーが失敗しました")
+        self.assertEqual([d["ok"] for d in done], [True, True])
+        self.assertIsNone(done[0]["reason"])
+        self.assertEqual(done[0]["env"], [])
+
+    def test_no_silent(self):
+        """--silent だと MSI が /quiet になり、古い版を消すときに UAC の確認を出せず 1603 で失敗する（2026-10-29）"""
+        self.assertNotIn("--silent", update.winget_args("Microsoft.OpenJDK.21"))
+
+    def test_env_changes_are_recorded(self):
+        before = {"machine": {"JAVA_HOME": "C:\\jdk-21\\", "Path": "C:\\jdk-21\\bin"}, "user": {}}
+        after = {"machine": {"JAVA_HOME": "C:\\jdk-17\\", "Path": "C:\\jdk-17\\bin;C:\\jdk-21\\bin"}, "user": {}}
+        out = io.StringIO()
+        done = self.run_update(["winget:Gyan.FFmpeg"], [0], out, regs=[before, after])
+        self.assertEqual([(c["name"], c.get("new")) for c in done[0]["env"]], [("JAVA_HOME", "C:\\jdk-17\\"), ("PATH", None)])
+        self.assertIn("-- 環境変数が変わりました:\n   マシンの JAVA_HOME: C:\\jdk-21\\ → C:\\jdk-17\\\n", out.getvalue())
+
+    def test_unreadable_registry_does_not_stop(self):
+        def broken():
+            raise OSError("読めない")
+        done = update.run(CFG, self.data, ["winget:Gyan.FFmpeg"], io.StringIO(), self.runners([0]),
+                          explain=EXPLAIN.get, read_env=broken)
+        self.assertEqual((done[0]["ok"], done[0]["env"]), (True, []))
+
+    def test_stops_at_first_failure(self):
+        """同じ理由で続けて失敗し、UAC の確認だけが続くのを避ける（2026-10-29 OpenJDK 17 → 21）"""
+        out = io.StringIO()
+        done = self.run_update(["winget:Gyan.FFmpeg", "winget:7zip.7zip"], [0x8A150030, 0], out)
+        self.assertEqual([c[3] for c in self.calls], ["Gyan.FFmpeg"])
+        self.assertEqual([d["ok"] for d in done], [False])
+        self.assertEqual(done[0]["code"], "0x8A150030")
+        self.assertIn("残りの 1 件は動かしていません: winget:7zip.7zip", out.getvalue())
         with open(self.data / update.HISTORY_FILE, encoding="utf-8") as f:
             hist = [json.loads(x) for x in f]
-        self.assertEqual([h["key"] for h in hist], ["winget:Gyan.FFmpeg", "winget:7zip.7zip"])
+        self.assertEqual([h["key"] for h in hist], ["winget:Gyan.FFmpeg"])
+
+    def test_winget_reason_has_both_codes(self):
+        out = io.StringIO()
+        done = self.run_update(["winget:Gyan.FFmpeg"], [0x8A150030], out)
+        self.assertEqual(done[0]["reason"], "winget: アンインストール コマンドの実行に失敗しました\n"
+                                            "インストーラの終了コード 1603: Fatal error during installation.")
+        self.assertIn("   winget: アンインストール コマンドの実行に失敗しました\n", out.getvalue())
+
+    def test_reason_when_winget_cannot_explain(self):
+        done = self.run_update(["winget:Gyan.FFmpeg"], [0x8A150030], explain=lambda _c: None)
+        self.assertIn("（意味を引けませんでした）", done[0]["reason"])
 
     def test_not_applicable_is_not_failure(self):
-        done = update.run(CFG, self.data, ["winget:7zip.7zip"], io.StringIO(), self.runners([0x8A15002B]))
-        self.assertTrue(done[0]["ok"])
+        done = self.run_update(["winget:7zip.7zip", "winget:Gyan.FFmpeg"], [0x8A15002B, 0])
+        self.assertEqual([d["ok"] for d in done], [True, True])
 
     def test_no_check_yet(self):
         (self.data / check.CHECK_FILE).unlink()
         with self.assertRaises(update.Refused):
-            update.run(CFG, self.data, ["winget:7zip.7zip"], io.StringIO(), self.runners([0]))
+            self.run_update(["winget:7zip.7zip"], [0])
 
-    def test_exception_in_one_keeps_going(self):
-        done = update.run(CFG, self.data, ["ghostscript", "winget:7zip.7zip"], io.StringIO(), self.runners([0]))
-        self.assertEqual([d["ok"] for d in done], [False, True])
+    def test_exception_stops_too(self):
+        done = self.run_update(["ghostscript", "winget:7zip.7zip"], [0])
+        self.assertEqual([d["ok"] for d in done], [False])
         self.assertIn("SHA-256", done[0]["tail"])
+        self.assertEqual(done[0]["reason"], "RuntimeError: SHA-256 が合いません")
+        self.assertEqual(self.calls, [])
 
 
 class CygwinRunner(unittest.TestCase):

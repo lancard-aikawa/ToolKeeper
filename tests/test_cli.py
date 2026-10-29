@@ -49,3 +49,33 @@ class Env(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Unbroken(unittest.TestCase):
+    """画面を閉じて出力の先が無くなっても、update は最後まで続ける（2026-10-29、OpenJDK 11 が OSError: [Errno 22] で落ちた）"""
+
+    class Closed:
+        def __init__(self):
+            self.calls = 0
+
+        def write(self, s):
+            self.calls += 1
+            raise OSError(22, "Invalid argument")
+
+        def flush(self):
+            raise OSError(22, "Invalid argument")
+
+    def test_write_after_close(self):
+        inner = self.Closed()
+        out = cli._Unbroken(inner)
+        self.assertEqual(out.write("abc"), 3)
+        out.flush()
+        out.write("def")
+        self.assertEqual(inner.calls, 1)  # 一度壊れたら、もう書きに行かない
+
+    def test_passes_through(self):
+        inner = io.StringIO()
+        out = cli._Unbroken(inner)
+        out.write("x")
+        self.assertEqual(inner.getvalue(), "x")
+        self.assertEqual(cli._Unbroken(None).write("y"), 1)  # pythonw では sys.stdout が None

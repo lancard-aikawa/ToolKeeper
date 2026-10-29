@@ -65,3 +65,22 @@ class ParseOtherLanguage(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ParseReleaseDate(unittest.TestCase):
+    def test_japanese(self):
+        self.assertEqual(winget.parse_release_date(fixture("winget_show_ja.txt")), "2026-09-20")
+
+    def test_english(self):
+        self.assertEqual(winget.parse_release_date(fixture("winget_show_en.txt")), "2026-09-20")
+
+    def test_ignores_dates_outside_installer(self):
+        # リリースノートや説明の中の日付（2025-01-01・2025-12-31）は拾わない
+        text = fixture("winget_show_en.txt").replace("  Release Date: 2026-09-20\n", "")
+        self.assertIsNone(winget.parse_release_date(text))
+
+    def test_missing(self):
+        self.assertIsNone(winget.parse_release_date(fixture("winget_show_nodate.txt")))
+
+    def test_crlf(self):
+        self.assertEqual(winget.parse_release_date(fixture("winget_show_ja.txt").replace("\n", "\r\n")), "2026-09-20")

@@ -20,7 +20,7 @@ def match(rules: list[dict], winget_id: str) -> tuple[str, str] | None:
 
 
 def state(cycles: list[dict], product: str, cycle: str, today: date) -> dict | None:
-    """{product, cycle, date, state, latest}。state は ended・soon・ok。系列が載っていなければ None"""
+    """{product, cycle, date, state, latest, latest_date}。state は ended・soon・ok。系列が載っていなければ None"""
     for c in cycles:
         if str(c.get("cycle")) != cycle:
             continue
@@ -32,7 +32,7 @@ def state(cycles: list[dict], product: str, cycle: str, today: date) -> dict | N
         else:
             st = "ended" if end is True else "ok"
         return {"product": product, "cycle": cycle, "date": when.isoformat() if when else None,
-                "state": st, "latest": c.get("latest")}
+                "state": st, "latest": c.get("latest"), "latest_date": c.get("latestReleaseDate")}
     return None
 
 
