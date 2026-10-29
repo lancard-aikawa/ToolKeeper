@@ -6,8 +6,8 @@ import sys
 import traceback
 from pathlib import Path
 
-from . import __version__, check, store, winget
-from .labels import ENV_KIND, ENV_STATE, SCOPE_LABEL, TIER_LABEL, note_text
+from . import __version__, check, firewall, store, winget
+from .labels import ENV_KIND, ENV_STATE, FW_DIRECTION, FW_STATE, SCOPE_LABEL, TIER_LABEL, note_text
 from . import config as cfgmod
 from . import env as envmod
 from . import status as statusmod
@@ -61,6 +61,7 @@ def _build_parser() -> argparse.ArgumentParser:
     ev = sub.add_parser("env", help="道具にかかわる環境変数と PATH をレジストリから読んで出す（--fix・--undo のときだけ書き換える）")
     ev.add_argument("--fix", nargs="+", metavar="ID", help="出した行の ID を直す（直し方のある行だけ。マシンの分は UAC が出る）")
     ev.add_argument("--undo", action="store_true", help="最後の変更を 1 つ戻す")
+    sub.add_parser("firewall", help="ファイアウォールの規則のうち、プログラムを指す物を出す（見るだけ）")
     st = sub.add_parser("status", help="使える状態か")
     st.add_argument("--json", action="store_true", help="JSON で出す")
     sub.add_parser("gui", help="画面を開く（pythonw で scripts/toolkeeper-launch.py gui なら黒い窓が出ない）")
@@ -160,6 +161,22 @@ def _env(args, cfg: dict, data: Path, reg: envmod.Registry | None = None) -> int
     return EXIT_OK
 
 
+def _firewall(cfg: dict, read_rules=firewall.read_rules, read_registry=envmod.read_registry) -> int:
+    """通信の許可（§3.9）。見るだけ"""
+    try:
+        rows = firewall.inspect(read_rules(), firewall.commands(read_registry(), cfg["env_commands"]))
+    except (OSError, RuntimeError) as e:
+        print(f"規則を読めません: {e}", file=sys.stderr)
+        return EXIT_FAILED
+    for r in rows:
+        print(f"{_fit(FW_STATE[r['state']], 16)} {_fit(r['tool'] or '-', 20)} {_fit(FW_DIRECTION.get(r['direction'], r['direction']), 4)} "
+              f"{_fit(r['name'], 28)} {r['program']}")
+    n = firewall.counts(rows)
+    print(f"ブロック {n['block']} 件、規則が無い {n['none']} 件、プログラムが無い {n['gone']} 件（全 {len(rows)} 件。"
+          "ここでは書き換えない。直すときは wf.msc で）")
+    return EXIT_OK
+
+
 def _dispatch(args, cfg: dict, data: Path) -> int:
     if args.command == "check":
         try:
@@ -206,6 +223,8 @@ def _dispatch(args, cfg: dict, data: Path) -> int:
         return EXIT_OK
     if args.command == "env":
         return _env(args, cfg, data)
+    if args.command == "firewall":
+        return _firewall(cfg)
     if args.command == "status":
         st = statusmod.run(cfg, data)
         if args.json:

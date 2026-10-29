@@ -7,6 +7,9 @@ ENV_STATE = {"bad": "切れている", "warn": "注意", "info": "整理でき�
 ENV_KIND = {"var": "変数", "path-missing": "PATH の切れ", "path-dup": "PATH の重複", "path-versioned": "PATH の版",
             "shadow": "2 つある"}
 SCOPE_LABEL = {"machine": "マシン", "user": "ユーザー", "": "-"}
+# 通信の許可（§3.9）
+FW_STATE = {"block": "ブロック", "none": "規則が無い", "gone": "プログラムが無い", "allow": "許可", "off": "無効"}
+FW_DIRECTION = {"in": "受信", "out": "送信", "": "-"}
 
 
 def can_update(it: dict) -> bool:

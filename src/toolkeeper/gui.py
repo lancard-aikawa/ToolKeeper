@@ -18,11 +18,11 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from . import __version__, check, cygwin, env, store, update
+from . import __version__, check, cygwin, env, firewall, store, update
 from . import config as cfgmod
 from . import status as statusmod
 from .ghostscript import _ps51_env
-from .labels import ENV_KIND, ENV_STATE, SCOPE_LABEL, TIER_LABEL, can_update, note_text
+from .labels import ENV_KIND, ENV_STATE, FW_DIRECTION, FW_STATE, SCOPE_LABEL, TIER_LABEL, can_update, note_text
 from .paths import APP_DIR, data_dir
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -90,6 +90,20 @@ def env_rows(found: list[dict], picked: set[str], fixable: bool = True) -> list[
         rows.append((f["id"], (mark, ENV_STATE[f["state"]], ENV_KIND[f["kind"]], SCOPE_LABEL[f["scope"]], f["name"],
                                f["value"], f["detail"], env.fix_text(f)), f["state"], pick))
     return rows
+
+
+def firewall_rows(rows: list[dict], tools_only: bool) -> list[tuple[str, tuple, str]]:
+    """通信の許可のタブの行: (ID, 状態・道具・規則名・方向・プロファイル・プロトコル・プログラム・説明, 色の札)。
+    並びは firewall.inspect のまま（ブロックが先）。tools_only なら道具の印がある物だけ"""
+    return [(r["id"], (FW_STATE[r["state"]], r["tool"] or "-", r["name"], FW_DIRECTION.get(r["direction"], r["direction"]),
+                       r["profiles"] or "-", r["protocol"] or "-", r["program"], r["detail"]), r["state"])
+            for r in rows if r["tool"] or not tools_only]
+
+
+def firewall_count_text(rows: list[dict]) -> str:
+    n = firewall.counts(rows)
+    return (f"ブロック {n['block']} 件、規則が無い {n['none']} 件、プログラムが無い {n['gone']} 件（全 {len(rows)} 件。"
+            "行にマウスを乗せると、下に全文が出ます）")
 
 
 def _read_history(path: Path, limit: int = 500) -> list[dict]:
@@ -198,6 +212,7 @@ class App:
         self.env_found: dict[str, dict] = {}
         self.env_picked: set[str] = set()
         self.env_hover: str | None = None
+        self.fw_rows: list[dict] = []
 
         root.title(f"ToolKeeper {__version__}")
         root.geometry("1180x680")
@@ -216,6 +231,7 @@ class App:
         self.notebook = nb
         self._build_tools(nb)
         self._build_env(nb)
+        self._build_firewall(nb)
         self._build_history(nb)
 
         self._after = self.root.after(100, self._poll)
@@ -693,6 +709,74 @@ class App:
             return
         self.run_command("最後の変更を戻す", self.toolkeeper("env", "--undo"), out=self.env_output)
 
+    # ---- 通信の許可のタブ（§3.9。見るだけ）
+
+    def _build_firewall(self, nb: ttk.Notebook) -> None:
+        tab = ttk.Frame(nb, padding=10)
+        nb.add(tab, text="通信の許可")
+        top = ttk.Frame(tab)
+        top.pack(side=tk.TOP, fill=tk.X)
+        b = ttk.Button(top, text="読み直す", command=self.reload_firewall, cursor="hand2")
+        b.pack(side=tk.LEFT, padx=(0, 6))
+        self.buttons.append(b)
+        self.fw_tools_only = tk.BooleanVar(value=False)
+        ttk.Checkbutton(top, text="道具に関係する物だけ", variable=self.fw_tools_only, command=self.show_firewall_rows,
+                        cursor="hand2").pack(side=tk.LEFT, padx=(4, 0))
+        self.fw_count = ttk.Label(top, text="")
+        self.fw_count.pack(side=tk.LEFT, padx=(10, 0))
+        ttk.Label(tab, text="Windows ファイアウォールの規則のうち、プログラムを指す物です（ここでは書き換えません）。"
+                            "道具を上げると場所が変わり、古い場所の規則が残って、新しい場所には規則が無くなります。"
+                            "直すときは「セキュリティが強化された Windows Defender ファイアウォール」（wf.msc）で",
+                  wraplength=1120, justify=tk.LEFT).pack(side=tk.TOP, anchor=tk.W, pady=(8, 4))
+        # プログラムと説明は長いので、乗せた行の全文を表の下に出す（行は押せないので色もカーソルも変えない）
+        self.fw_full = ttk.Label(tab, text="", foreground="#555555", wraplength=980, justify=tk.LEFT)
+        self.fw_full.pack(side=tk.BOTTOM, anchor=tk.W, fill=tk.X, pady=(6, 0))
+        table = ttk.Frame(tab)
+        table.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        cols = [("state", "状態", 100), ("tool", "道具", 120), ("name", "規則名", 170), ("direction", "方向", 44),
+                ("profiles", "プロファイル", 130), ("protocol", "プロトコル", 80), ("program", "プログラム", 360),
+                ("detail", "説明", 260)]
+        self.fw_tree = ttk.Treeview(table, columns=[c[0] for c in cols], show="headings", selectmode="none")
+        for key, label, width in cols:
+            self.fw_tree.heading(key, text=label)
+            self.fw_tree.column(key, width=width, stretch=key in ("program", "detail"))
+        self.fw_tree.tag_configure("block", foreground="#b00020")
+        self.fw_tree.tag_configure("none", foreground="#8a5a00")
+        self.fw_tree.tag_configure("allow", foreground=PLAIN_FG)
+        self.fw_tree.tag_configure("off", foreground=PLAIN_FG)
+        scroll = ttk.Scrollbar(table, orient=tk.VERTICAL, command=self.fw_tree.yview)
+        scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.fw_tree.configure(yscrollcommand=scroll.set)
+        self.fw_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.fw_tree.bind("<Motion>", self._fw_motion)
+        self.fw_tree.bind("<Leave>", lambda _e: self.fw_full.config(text=""))
+
+    def _fw_motion(self, event) -> None:
+        row = self.fw_tree.identify_row(event.y)
+        r = next((x for x in self.fw_rows if x["id"] == row), None) if row else None
+        self.fw_full.config(text=f"{r['program']}\n{r['detail']}" if r else "")
+
+    def show_firewall_rows(self) -> None:
+        self.fw_tree.delete(*self.fw_tree.get_children())
+        for row, values, state in firewall_rows(self.fw_rows, self.fw_tools_only.get()):
+            self.fw_tree.insert("", tk.END, iid=row, values=values, tags=[state])
+
+    def show_firewall(self, rows: list[dict] | None, error: Exception | None) -> None:
+        if error:
+            self.fw_rows = []
+            self.show_firewall_rows()
+            self.fw_count.config(text=f"読めません: {error}")
+            return
+        self.fw_rows = rows
+        self.show_firewall_rows()
+        self.fw_count.config(text=firewall_count_text(rows))
+
+    def reload_firewall(self) -> None:
+        """netsh は 0.2 秒ほどなので CLI を挟まない。それでも画面は止めない"""
+        cmds = list(self.cfg["env_commands"])
+        self._run_in_background(
+            lambda: firewall.inspect(firewall.read_rules(), firewall.commands(env.read_registry(), cmds)), self.show_firewall)
+
     # ---- 履歴のタブ
 
     def _build_history(self, nb: ttk.Notebook) -> None:
@@ -742,6 +826,7 @@ class App:
         self.show_table()
         self.show_history()
         self.reload_env()
+        self.reload_firewall()
         cfg, data = dict(self.cfg), self.data
         self._run_in_background(lambda: statusmod.run(cfg, data), self._show_status)
 

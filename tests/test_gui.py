@@ -91,6 +91,28 @@ class EnvRows(unittest.TestCase):
         self.assertIn("環境の注意 3", gui.summary_text(r))
 
 
+FW_ROWS = [
+    {"id": "fw0", "state": "block", "tool": "node", "name": "node.exe", "direction": "in", "profiles": "パブリック",
+     "protocol": "TCP, UDP", "program": r"C:\nvm\v24.22.1\node.exe", "detail": "外からの接続を断っている"},
+    {"id": "fw1", "state": "none", "tool": "java", "name": "-", "direction": "", "profiles": "", "protocol": "",
+     "program": r"C:\Program Files\Microsoft\jdk-21.0.13.21-hotspot\bin\java.exe", "detail": "この場所には規則が無い"},
+    {"id": "fw2", "state": "gone", "tool": "", "name": "Microsoft Edge (mDNS-In)", "direction": "in", "profiles": "パブリック",
+     "protocol": "UDP", "program": r"C:\EdgeWebView\150.0\msedgewebview2.exe", "detail": "プログラムが無い"},
+]
+
+
+class FirewallRows(unittest.TestCase):
+    def test_labels_and_filter(self):
+        rows = gui.firewall_rows(FW_ROWS, tools_only=False)
+        self.assertEqual(rows[0], ("fw0", ("ブロック", "node", "node.exe", "受信", "パブリック", "TCP, UDP",
+                                           r"C:\nvm\v24.22.1\node.exe", "外からの接続を断っている"), "block"))
+        self.assertEqual(rows[1][1][:6], ("規則が無い", "java", "-", "-", "-", "-"))
+        self.assertEqual([r[0] for r in gui.firewall_rows(FW_ROWS, tools_only=True)], ["fw0", "fw1"])
+
+    def test_count_text(self):
+        self.assertIn("ブロック 1 件、規則が無い 1 件、プログラムが無い 1 件（全 3 件", gui.firewall_count_text(FW_ROWS))
+
+
 class Lines(unittest.TestCase):
     def test_progress_is_overwritten(self):
         buf = gui.LineBuffer()
@@ -189,6 +211,12 @@ class WindowBase(unittest.TestCase):
         self.env_patch = mock.patch.object(gui.env, "inspect", return_value=ENV_FOUND)
         self.env_patch.start()
         self.addCleanup(self.env_patch.stop)
+        # 本物の netsh も呼ばない
+        for p in (mock.patch.object(gui.firewall, "read_rules", return_value=[]),
+                  mock.patch.object(gui.firewall, "commands", return_value={}),
+                  mock.patch.object(gui.firewall, "inspect", return_value=FW_ROWS)):
+            p.start()
+            self.addCleanup(p.stop)
         with mock.patch.object(gui.statusmod, "run", return_value={
                 "toolkeeper": "0.1.0", "schema": 1, "data_dir": str(self.data), "last_check": None,
                 "task": {"registered": False}, "sources": {"winget": "1.29.380", "choco": None, "cygwin": None, "ghostscript": False}}):
@@ -224,6 +252,25 @@ class Window(WindowBase):
             self.app.offer_admin_terminal("x';calc;'", "bad")
         ask.assert_not_called()
         popen.assert_not_called()
+
+    def wait_for(self, cond, seconds=3.0):
+        end = time.monotonic() + seconds
+        while not cond() and time.monotonic() < end:
+            self.root.update()
+            time.sleep(0.02)
+
+    def test_firewall_tab_lists_and_filters(self):
+        tree = self.app.fw_tree
+        self.wait_for(lambda: len(tree.get_children()) == 3)
+        self.assertEqual(tree.get_children(), ("fw0", "fw1", "fw2"))
+        self.assertEqual(tree.item("fw0", "tags"), ("block",))
+        self.assertIn("ブロック 1 件", self.app.fw_count.cget("text"))
+        self.app.fw_tools_only.set(True)
+        self.app.show_firewall_rows()
+        self.assertEqual(tree.get_children(), ("fw0", "fw1"))
+        self.app.show_firewall(None, RuntimeError("netsh が無い"))
+        self.assertEqual(tree.get_children(), ())
+        self.assertIn("読めません: netsh が無い", self.app.fw_count.cget("text"))
 
     def test_close_while_running_asks(self):
         """仕事が動いている間に閉じようとしたら確かめる（2026-10-29、閉じたら裏の更新が落ちた）"""

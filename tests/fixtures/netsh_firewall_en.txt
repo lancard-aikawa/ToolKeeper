@@ -1,0 +1,58 @@
+
+Rule Name:                            OpenJDK Platform binary
+----------------------------------------------------------------------
+Description:                          OpenJDK Platform binary
+Enabled:                              Yes
+Direction:                            In
+Profiles:                             Public
+Grouping:
+LocalIP:                              Any
+RemoteIP:                             Any
+Protocol:                             TCP
+LocalPort:                            Any
+RemotePort:                           Any
+Edge traversal:                       Defer to user
+Program:                              C:\program files\microsoft\jdk-21.0.9.10-hotspot\bin\java.exe
+InterfaceTypes:                       Any
+Security:                             NotRequired
+Rule source:                          Local Setting
+Action:                               Allow
+
+Rule Name:                            node.exe
+----------------------------------------------------------------------
+Description:                          node.exe
+Enabled:                              Yes
+Direction:                            In
+Profiles:                             Private,Public
+Grouping:
+LocalIP:                              Any
+RemoteIP:                             Any
+Protocol:                             TCP
+LocalPort:                            Any
+RemotePort:                           Any
+Edge traversal:                       Defer to user
+Program:                              C:\users\taro\appdata\roaming\nvm\v24.22.1\node.exe
+InterfaceTypes:                       Any
+Security:                             NotRequired
+Rule source:                          Local Setting
+Action:                               Block
+
+Rule Name:                            Core Networking - DNS (UDP-Out)
+----------------------------------------------------------------------
+Enabled:                              Yes
+Direction:                            Out
+Profiles:                             Domain,Private,Public
+Grouping:                             Core Networking
+LocalIP:                              Any
+RemoteIP:                             Any
+Protocol:                             UDP
+LocalPort:                            Any
+RemotePort:                           53
+Edge traversal:                       No
+Program:                              Any
+Service:                              dnscache
+InterfaceTypes:                       Any
+Security:                             NotRequired
+Rule source:                          Local Setting
+Action:                               Allow
+Ok.

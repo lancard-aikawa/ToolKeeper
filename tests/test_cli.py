@@ -47,6 +47,26 @@ class Env(unittest.TestCase):
         self.assertIn("見つかりません", err.getvalue())
 
 
+class Firewall(unittest.TestCase):
+    def test_prints_rows_and_counts(self):
+        from toolkeeper import firewall
+        from tests.helpers import fixture
+        rules = firewall.parse_rules(fixture("netsh_firewall_en.txt"))
+        with contextlib.redirect_stdout(io.StringIO()) as out, mock.patch.object(cli.firewall, "commands", return_value={}):
+            code = cli._firewall({"env_commands": []}, read_rules=lambda: rules, read_registry=dict)
+        self.assertEqual(code, cli.EXIT_OK)
+        self.assertIn("node.exe", out.getvalue())
+        self.assertIn("wf.msc", out.getvalue())
+
+    def test_netsh_failure(self):
+        def broken():
+            raise RuntimeError("netsh が終了コード 1 で終わりました")
+        with contextlib.redirect_stderr(io.StringIO()) as err:
+            code = cli._firewall({"env_commands": []}, read_rules=broken, read_registry=dict)
+        self.assertEqual(code, cli.EXIT_FAILED)
+        self.assertIn("規則を読めません", err.getvalue())
+
+
 if __name__ == "__main__":
     unittest.main()
 
