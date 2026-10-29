@@ -15,8 +15,12 @@ python -m toolkeeper check                 # 全部を調べ、data\check.json �
 python -m toolkeeper list --all            # 前回の結果を表で出す（--all で C・D も）
 python -m toolkeeper update winget:Gyan.FFmpeg ghostscript cygwin   # 選んだ物を上げる（区分 A・B だけ）
 python -m toolkeeper env                   # 道具の環境変数と PATH の切れ・重複・2 つある物を出す（書き換えない）
+python -m toolkeeper env --fix <ID>        # 直し方のある行を直す（マシンの分は UAC）。--undo で最後の変更を戻す
 python -m toolkeeper status --json         # 使える状態か
 ```
+
+画面の「環境」タブは既定では見るだけ。画面から直す・戻すを出すには、`toolkeeper.json` に `"env_fix": true` を書く
+（PATH を壊すと関係の無いアプリまで起動しなくなるので、分かる人だけ）。
 
 `uv` があるなら `uv run toolkeeper check` でもよい。
 

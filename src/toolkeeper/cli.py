@@ -33,7 +33,9 @@ def _build_parser() -> argparse.ArgumentParser:
     up = sub.add_parser("update", help="選んだ物を上げる（区分 A・B だけ）。終わったら調べ直す")
     up.add_argument("keys", nargs="+", metavar="キー", help="check.json の key（winget:<ID> など）")
     up.add_argument("--no-check", action="store_true", help="終わったあとに調べ直さない")
-    sub.add_parser("env", help="道具にかかわる環境変数と PATH をレジストリから読んで出す（何も書き換えない）")
+    ev = sub.add_parser("env", help="道具にかかわる環境変数と PATH をレジストリから読んで出す（--fix・--undo のときだけ書き換える）")
+    ev.add_argument("--fix", nargs="+", metavar="ID", help="出した行の ID を直す（直し方のある行だけ。マシンの分は UAC が出る）")
+    ev.add_argument("--undo", action="store_true", help="最後の変更を 1 つ戻す")
     st = sub.add_parser("status", help="使える状態か")
     st.add_argument("--json", action="store_true", help="JSON で出す")
     sub.add_parser("gui", help="画面を開く（pythonw で scripts/toolkeeper-launch.py gui なら黒い窓が出ない）")
@@ -97,6 +99,42 @@ def main(argv: list[str] | None = None) -> int:
     return code
 
 
+def _env(args, cfg: dict, data: Path, reg: envmod.Registry | None = None) -> int:
+    """環境変数と PATH（§3.7）。--fix・--undo のときだけ書き換える"""
+    try:
+        if args.undo:
+            writes = [envmod.undo_plan(data)]
+        elif args.fix:
+            found = envmod.inspect(envmod.read_registry(), cfg["env_vars"], cfg["env_commands"])
+            writes = envmod.plan(envmod.read_registry(), found, args.fix)
+        else:
+            writes = None
+        if writes is not None:
+            for w in writes:
+                for c in w["changes"]:
+                    print(c)
+            data.mkdir(parents=True, exist_ok=True)
+            envmod.apply(writes, data, reg)
+            print("書き換えました。新しく開いたプログラムにだけ届きます（開いたままのターミナルや VS Code は開き直す）")
+            return EXIT_OK
+    except envmod.Refused as e:
+        print(e, file=sys.stderr)
+        return EXIT_USAGE
+    except (OSError, RuntimeError) as e:
+        print(e, file=sys.stderr)
+        return EXIT_FAILED
+    found = envmod.inspect(envmod.read_registry(), cfg["env_vars"], cfg["env_commands"])
+    for f in found:
+        print(f"{_fit(ENV_STATE[f['state']], 10)} {_fit(ENV_KIND[f['kind']], 12)} {_fit(SCOPE_LABEL[f['scope']], 8)} "
+              f"{_fit(f['name'], 10)} {f['value']}")
+        if f["detail"]:
+            print(f"{' ' * 42}{f['detail']}")
+        if f.get("fix"):
+            print(f"{' ' * 42}直し方: {envmod.fix_text(f)}（--fix {f['id']}）")
+    print(f"切れている・注意 {envmod.problems(found)} 件（変更は新しく開いたプログラムにだけ届く）")
+    return EXIT_OK
+
+
 def _dispatch(args, cfg: dict, data: Path) -> int:
     if args.command == "check":
         try:
@@ -131,12 +169,7 @@ def _dispatch(args, cfg: dict, data: Path) -> int:
         _print_table(result, show_all=args.all)
         return EXIT_OK
     if args.command == "env":
-        found = envmod.inspect(envmod.read_registry(), cfg["env_vars"], cfg["env_commands"])
-        for f in found:
-            print(f"{_fit(ENV_STATE[f['state']], 10)} {_fit(ENV_KIND[f['kind']], 12)} {_fit(SCOPE_LABEL[f['scope']], 8)} "
-                  f"{_fit(f['name'], 10)} {f['value']}" + (f"\n{' ' * 42}{f['detail']}" if f["detail"] else ""))
-        print(f"切れている・注意 {envmod.problems(found)} 件（変更は新しく開いたプログラムにだけ届く）")
-        return EXIT_OK
+        return _env(args, cfg, data)
     if args.command == "status":
         st = statusmod.run(cfg, data)
         if args.json:

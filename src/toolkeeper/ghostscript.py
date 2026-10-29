@@ -124,18 +124,11 @@ def download(rel: dict, folder: Path, out, fetch=store._download) -> Path:
 def run_elevated(exe: Path, new: str, old: str | None, log: Path) -> int:
     """gs-install.ps1 を管理者として動かして終了コードを返す（UAC が 1 回出る）。
     断られたら Start-Process が例外を出すので 1 が返る"""
-    log.unlink(missing_ok=True)
-    args = ["-NoProfile", "-ExecutionPolicy", "Bypass", "-File", str(INSTALL_SCRIPT),
-            "-Installer", str(exe), "-NewVersion", new, "-Log", str(log)]
+    from . import elevate
+    args = ["-Installer", str(exe), "-NewVersion", new, "-Log", str(log)]
     if old:
         args += ["-OldVersion", old]
-    # Start-Process は ArgumentList を空白でつなぐだけなので、空白を含む値は "" で囲む
-    joined = " ".join(f'"{a}"' if " " in a else a for a in args).replace("'", "''")
-    ps = (f"$p = Start-Process -FilePath powershell.exe -Verb RunAs -Wait -PassThru -WindowStyle Hidden "
-          f"-ArgumentList '{joined}'; exit $p.ExitCode")
-    r = subprocess.run(["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", ps], capture_output=True,
-                       text=True, env=_ps51_env(), creationflags=_NO_WINDOW)
-    return r.returncode
+    return elevate.run_script(INSTALL_SCRIPT, args, log)
 
 
 def installed() -> list[str]:

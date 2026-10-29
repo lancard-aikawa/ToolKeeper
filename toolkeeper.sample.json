@@ -77,5 +77,6 @@
     "ffmpeg",
     "gswin64c",
     "7z"
-  ]
+  ],
+  "env_fix": false
 }

@@ -48,6 +48,8 @@ DEFAULTS: dict = {
     # 環境変数と PATH（§3.7）: 見る変数と、PATH に 2 つあるかを見るコマンド
     "env_vars": ["JAVA_HOME", "JDK_HOME", "JRE_HOME", "PHPRC", "GS_LIB", "PYTHONHOME", "PYTHONPATH", "NODE_PATH", "PERL5LIB"],
     "env_commands": ["php", "java", "javac", "python", "node", "git", "gh", "perl", "cmake", "ffmpeg", "gswin64c", "7z"],
+    # 画面の環境のタブで書き換え（直す・戻す）を出すか。既定は見るだけ（PATH を壊すと素人には原因が分からない）
+    "env_fix": False,
 }
 
 

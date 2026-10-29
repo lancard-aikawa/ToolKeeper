@@ -1,6 +1,7 @@
 """toolkeeper gui（design.md §8）。表の中身と、窓を作っての通し（画面には出さない）"""
 import json
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -57,14 +58,26 @@ class Rows(unittest.TestCase):
         self.assertIn("まだ調べていません", gui.summary_text(None))
 
 
+ENV_FOUND = [
+    {"id": "path-missing:machine:7:aa", "state": "bad", "kind": "path-missing", "scope": "machine", "name": "PATH",
+     "value": r"C:\Python313\Scripts", "detail": "フォルダが無い", "fix": {"action": "remove", "to": None, "pos": 7}},
+    {"id": "shadow::cmake:bb", "state": "warn", "kind": "shadow", "scope": "", "name": "cmake",
+     "value": r"C:\Strawberry\c\bin\cmake.exe", "detail": "使われるのはこちら", "fix": None},
+    {"id": "var:user:PHPRC:cc", "state": "ok", "kind": "var", "scope": "user", "name": "PHPRC", "value": r"C:\work\php-conf",
+     "detail": "", "fix": None},
+]
+
+
 class EnvRows(unittest.TestCase):
-    def test_labels_and_tags(self):
-        rows = gui.env_rows([
-            {"state": "bad", "kind": "path-missing", "scope": "machine", "name": "PATH", "value": r"C:\Python313\Scripts", "detail": "フォルダが無い"},
-            {"state": "ok", "kind": "var", "scope": "user", "name": "PHPRC", "value": r"C:\work\php-conf", "detail": ""},
-        ])
-        self.assertEqual(rows[0], (("切れている", "PATH の切れ", "マシン", "PATH", r"C:\Python313\Scripts", "フォルダが無い"), "bad"))
-        self.assertEqual(rows[1][0][:3], ("正しい", "変数", "ユーザー"))
+    def test_labels_marks_and_tags(self):
+        rows = gui.env_rows(ENV_FOUND, {"path-missing:machine:7:aa"})
+        self.assertEqual(rows[0], ("path-missing:machine:7:aa",
+                                   (gui.PICK_ON, "切れている", "PATH の切れ", "マシン", "PATH", r"C:\Python313\Scripts",
+                                    "フォルダが無い", "PATH から消す"),
+                                   "bad", True))
+        self.assertEqual(rows[1][1][0], "")  # 直し方の無い行には札を付けない
+        self.assertFalse(rows[1][3])
+        self.assertEqual(rows[2][1][1:4], ("正しい", "変数", "ユーザー"))
 
     def test_summary_mentions_env_only_when_some(self):
         self.assertNotIn("環境", gui.summary_text(RESULT))
@@ -96,8 +109,9 @@ class History(unittest.TestCase):
         self.assertEqual(rows[1][0], "2026-10-28 18:06:04")
 
 
-class Window(unittest.TestCase):
-    """窓を作って、選ぶ・押せない行は押せない・閉じる、までを通す（画面には出さない）"""
+class WindowBase(unittest.TestCase):
+    """窓を作る（画面には出さない）。CONFIG に設定を書くと、その設定で開く"""
+    CONFIG: dict | None = None
 
     def setUp(self):
         import tkinter as tk
@@ -110,14 +124,16 @@ class Window(unittest.TestCase):
             self.skipTest(f"Tk を開けません: {e}")
         self.root.withdraw()
         # 本物のレジストリは見ない（環境のタブは裏のスレッドで読むので、窓を閉じるまで差し替えておく）
-        self.env_patch = mock.patch.object(gui.env, "inspect", return_value=[
-            {"state": "warn", "kind": "shadow", "scope": "", "name": "cmake", "value": r"C:\Strawberry\c\bin\cmake.exe", "detail": "x"}])
+        self.env_patch = mock.patch.object(gui.env, "inspect", return_value=ENV_FOUND)
         self.env_patch.start()
         self.addCleanup(self.env_patch.stop)
         with mock.patch.object(gui.statusmod, "run", return_value={
                 "toolkeeper": "0.1.0", "schema": 1, "data_dir": str(self.data), "last_check": None,
                 "task": {"registered": False}, "sources": {"winget": "1.29.380", "choco": None, "cygwin": None, "ghostscript": False}}):
-            self.app = gui.App(self.root, self.data / "none.json", str(self.data))
+            config = self.data / "toolkeeper.json"
+            if self.CONFIG is not None:
+                config.write_text(json.dumps(self.CONFIG), encoding="utf-8")
+            self.app = gui.App(self.root, config, str(self.data))
             self.root.update()
 
     def tearDown(self):
@@ -126,6 +142,37 @@ class Window(unittest.TestCase):
         except Exception:  # noqa: BLE001
             pass
         self.tmp.cleanup()
+
+
+class Window(WindowBase):
+    """道具のタブ: 選ぶ・押せない行は押せない・閉じる、までを通す。環境のタブは既定（見るだけ）"""
+
+    def wait_env(self):
+        for _ in range(100):  # 裏のスレッドの結果は _poll（100 ms ごと）で受け取る
+            self.root.update()
+            if self.app.env_tree.get_children():
+                return
+            time.sleep(0.02)
+        self.fail("環境のタブが埋まらない")
+
+    def test_env_is_read_only_by_default(self):
+        """素人が PATH を壊さないよう、既定では直す・戻すを出さず、行も押せない（§3.7）"""
+        app = self.app
+        self.wait_env()
+        self.assertIsNone(app.fix_button)
+        self.assertEqual([b.cget("text") for b in app.env_buttons], ["読み直す"])
+        self.assertNotIn("pick", app.env_tree.cget("displaycolumns"))
+        row = "path-missing:machine:7:aa"
+        self.assertEqual(app.env_tree.item(row, "tags"), ("bad",))
+        self.assertEqual(app.env_tree.set(row, "fix"), "PATH から消す")  # 直し方は参考として出す
+        app._env_hover(row)
+        self.assertEqual(str(app.env_tree.cget("cursor")), "")
+        app.toggle_env(row)
+        self.assertEqual(app.env_picked, set())
+        with mock.patch.object(app, "run_command") as run:
+            app.fix_picked()
+            app.undo_env()
+        run.assert_not_called()
 
     def test_pick_and_button(self):
         """更新のボタンは押せない状態にしない（vista テーマでは枠が消えて文字に見える）"""
@@ -190,18 +237,6 @@ class Window(unittest.TestCase):
         ask.assert_not_called()
         run.assert_not_called()
 
-    def test_env_tab_shows_rows(self):
-        app = self.app
-        for _ in range(50):  # 裏のスレッドの結果は _poll（100 ms ごと）で受け取る
-            self.root.update()
-            if app.env_tree.get_children():
-                break
-            self.root.after(20)
-        rows = app.env_tree.get_children()
-        self.assertEqual(len(rows), 1)
-        self.assertEqual(app.env_tree.item(rows[0], "tags"), ("warn",))
-        self.assertIn("1 件", app.env_count.cget("text"))
-
     def test_footer_stays_inside_small_window(self):
         """下のボタン行が、窓を小さくしても外に押し出されない"""
         self.root.deiconify()
@@ -210,6 +245,69 @@ class Window(unittest.TestCase):
         bar = self.app.message.master
         self.assertLessEqual(bar.winfo_y() + bar.winfo_height(), self.root.winfo_height())
         self.root.withdraw()
+
+
+class EnvFixWindow(WindowBase):
+    """環境のタブの書き換え（設定 env_fix が true のときだけ出る）"""
+    CONFIG = {"env_fix": True}
+
+    def wait_env(self):
+        for _ in range(100):  # 裏のスレッドの結果は _poll（100 ms ごと）で受け取る
+            self.root.update()
+            if self.app.env_tree.get_children():
+                return
+            time.sleep(0.02)
+        self.fail("環境のタブが埋まらない")
+
+    def test_env_tab_shows_rows(self):
+        app = self.app
+        self.wait_env()
+        rows = app.env_tree.get_children()
+        self.assertEqual(len(rows), 3)
+        self.assertEqual(app.env_tree.item(rows[0], "tags"), ("bad", "pick"))
+        self.assertEqual(app.env_tree.item(rows[1], "tags"), ("warn",))
+        self.assertIn("2 件", app.env_count.cget("text"))
+        self.assertEqual(app.fix_button.cget("bg"), gui.PRIMARY_BG)
+
+    def test_env_hover_and_pick_only_on_fixable_rows(self):
+        app = self.app
+        self.wait_env()
+        app._env_hover("shadow::cmake:bb")
+        self.assertEqual(str(app.env_tree.cget("cursor")), "")
+        self.assertIn("cmake", app.env_full.cget("text"))  # 全文はどの行でも出す
+        app._env_hover("path-missing:machine:7:aa")
+        self.assertEqual(str(app.env_tree.cget("cursor")), "hand2")
+        app.toggle_env("path-missing:machine:7:aa")
+        self.assertIn("(1)", app.fix_button.cget("text"))
+
+    def test_env_fix_runs_cli_after_confirming(self):
+        app = self.app
+        self.wait_env()
+        app.toggle_env("path-missing:machine:7:aa")
+        writes = [{"scope": "machine", "name": "Path", "old": "a", "new": "b", "changes": ["Path（マシン）から x を消す"]}]
+        with mock.patch.object(gui.env, "read_registry", return_value={}), \
+             mock.patch.object(gui.env, "plan", return_value=writes), \
+             mock.patch.object(gui.messagebox, "askokcancel", return_value=True) as ask, \
+             mock.patch.object(app, "run_command") as run:
+            app.fix_picked()
+        self.assertIn("UAC", ask.call_args.args[1])
+        argv = run.call_args.args[1]
+        self.assertEqual(argv[-3:], ["env", "--fix", "path-missing:machine:7:aa"])
+        self.assertIs(run.call_args.kwargs["out"], app.env_output)
+
+    def test_env_fix_without_picks_explains(self):
+        app = self.app
+        self.wait_env()
+        with mock.patch.object(app, "run_command") as run:
+            app.fix_picked()
+        run.assert_not_called()
+        self.assertIn("行を押して", app.message.cget("text"))
+
+    def test_undo_without_history_explains(self):
+        with mock.patch.object(self.app, "run_command") as run:
+            self.app.undo_env()
+        run.assert_not_called()
+        self.assertIn("戻せる変更がありません", self.app.message.cget("text"))
 
 
 if __name__ == "__main__":

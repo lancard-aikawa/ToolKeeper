@@ -1,6 +1,9 @@
+import contextlib
+import io
 import tempfile
 import unittest
 from pathlib import Path
+from unittest import mock
 
 from toolkeeper import check, cli, store
 
@@ -26,6 +29,22 @@ class Log(unittest.TestCase):
             text = (Path(d) / "last-run.log").read_text(encoding="utf-8")
         self.assertEqual(code, cli.EXIT_USAGE)
         self.assertIn("まだ調べていません", text)
+
+
+class Env(unittest.TestCase):
+    def test_undo_without_history_is_refused(self):
+        with tempfile.TemporaryDirectory() as d, contextlib.redirect_stderr(io.StringIO()) as err:
+            code = cli.main(["--data", d, "env", "--undo"])
+        self.assertEqual(code, cli.EXIT_USAGE)
+        self.assertIn("戻せる変更がありません", err.getvalue())
+
+    def test_unknown_id_is_refused_before_writing(self):
+        with tempfile.TemporaryDirectory() as d, contextlib.redirect_stderr(io.StringIO()) as err, \
+                mock.patch.object(cli.envmod, "read_registry", return_value={"machine": {}, "user": {}}):
+            code = cli.main(["--data", d, "env", "--fix", "path-dup:machine:1:00000000"])
+            self.assertFalse((Path(d) / "env-history.jsonl").exists())
+        self.assertEqual(code, cli.EXIT_USAGE)
+        self.assertIn("見つかりません", err.getvalue())
 
 
 if __name__ == "__main__":
