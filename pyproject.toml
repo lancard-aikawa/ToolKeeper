@@ -1,6 +1,6 @@
 [project]
 name = "toolkeeper"
-version = "0.1.0"
+version = "0.2.0"
 description = "Keep the tools on a Windows PC up to date: winget, choco, PHP, Ghostscript and Cygwin"
 readme = "README.md"
 requires-python = ">=3.11"
