@@ -35,6 +35,9 @@ DETAIL = {
 }
 
 
+OEM = "oem"  # Windows の OEM のコード ページ（日本語の Windows では cp932）。テストで差し替える
+
+
 def decode(raw: bytes) -> str:
     """UTF-8 として読み、読めなければ OEM のコード ページ（日本語の Windows では cp932）で読む。
     手元の Windows 11 はコンソールの有無に関係なく UTF-8 だったが、古い netsh は OEM で書くことがある"""
@@ -42,7 +45,7 @@ def decode(raw: bytes) -> str:
         return raw.decode("utf-8")
     except UnicodeDecodeError:
         try:
-            return raw.decode("oem", errors="replace")
+            return raw.decode(OEM, errors="replace")
         except LookupError:  # Windows 以外（テスト）
             return raw.decode("cp932", errors="replace")
 

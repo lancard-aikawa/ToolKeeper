@@ -2,6 +2,7 @@
 import os
 import subprocess
 import unittest
+from unittest import mock
 
 from toolkeeper import firewall
 from tests.helpers import fixture
@@ -45,12 +46,14 @@ class Parse(unittest.TestCase):
                           ("Core Networking - DNS (UDP-Out)", "allow", "out", True)])
         self.assertIsNone(rules[2]["program"])
 
+    @mock.patch.object(firewall, "OEM", "cp932")  # GitHub のランナーは英語の Windows で OEM が cp437
     def test_decode_utf8_and_oem(self):
-        """コンソールからは UTF-8、コンソールの無い画面からは cp932 で出る"""
+        """UTF-8 で読めなければ OEM のコード ページで読む（日本語の Windows の古い netsh は cp932 で書く）"""
         text = fixture("netsh_firewall_ja.txt")
         self.assertEqual(firewall.decode(text.encode("utf-8")), text)
         self.assertEqual(firewall.decode(text.encode("cp932")), text)
 
+    @mock.patch.object(firewall, "OEM", "cp932")
     def test_netsh_failure(self):
         def run(args, **kw):
             self.assertEqual(args, firewall.NETSH)
