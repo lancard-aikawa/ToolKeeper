@@ -178,11 +178,17 @@ class Window(WindowBase):
         """更新のボタンは押せない状態にしない（vista テーマでは枠が消えて文字に見える）"""
         app = self.app
         self.assertTrue(app.enabled(app.update_button))
+        self.assertIn("なし", app.picked_label.cget("text"))
         app.toggle("winget:Gyan.FFmpeg")
         self.assertEqual(app.tree.item("winget:Gyan.FFmpeg", "values")[0], gui.PICK_ON)
         self.assertIn("(1)", app.update_button.cget("text"))
+        # [x] だけでは見分けられなかったので、行を塗り、表の上に名前を出す（2026-10-29）
+        self.assertIn("picked", app.tree.item("winget:Gyan.FFmpeg", "tags"))
+        self.assertIn("選んでいる物（1）: FFmpeg", app.picked_label.cget("text"))
         app.toggle("winget:Gyan.FFmpeg")
         self.assertNotIn("(", app.update_button.cget("text"))
+        self.assertNotIn("picked", app.tree.item("winget:Gyan.FFmpeg", "tags"))
+        self.assertIn("なし", app.picked_label.cget("text"))
         self.assertTrue(app.enabled(app.update_button))
 
     def test_update_without_picks_explains(self):
@@ -279,6 +285,16 @@ class EnvFixWindow(WindowBase):
         self.assertEqual(str(app.env_tree.cget("cursor")), "hand2")
         app.toggle_env("path-missing:machine:7:aa")
         self.assertIn("(1)", app.fix_button.cget("text"))
+        self.assertIn("picked", app.env_tree.item("path-missing:machine:7:aa", "tags"))
+        self.assertIn(r"選んでいる物（1）: マシンの PATH C:\Python313\Scripts", app.env_picked_label.cget("text"))
+
+    def test_picked_survives_reload(self):
+        """読み直しても、選んだ行は塗ったまま"""
+        app = self.app
+        self.wait_env()
+        app.toggle_env("path-missing:machine:7:aa")
+        app.show_env(ENV_FOUND, None)
+        self.assertIn("picked", app.env_tree.item("path-missing:machine:7:aa", "tags"))
 
     def test_env_fix_runs_cli_after_confirming(self):
         app = self.app

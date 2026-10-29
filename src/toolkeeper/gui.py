@@ -28,6 +28,9 @@ from .paths import APP_DIR, data_dir
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 PICK_OFF, PICK_ON = "[ ]", "[x]"
 HOVER_BG = "#dbeafe"
+# 選んだ行は塗って太字にする（[x] の札だけでは、ほかの [ ] と見分けられなかった。2026-10-29）。乗せたときの青とは別の色
+PICKED_BG = "#fde68a"
+PICKED_FG = "#1e3a8a"
 PRIMARY_BG, PRIMARY_HOVER, PRIMARY_ACTIVE, PRIMARY_OFF = "#2563eb", "#1e40af", "#1e3a8a", "#9ca3af"
 PLAIN_FG = "#777777"
 
@@ -104,6 +107,22 @@ def history_rows(path: Path, limit: int = 500) -> list[tuple]:
         rows.append((h.get("at", "").replace("T", " ")[:19], h.get("key", ""), h.get("from") or "-", h.get("to") or "-",
                      "済み" if h.get("ok") else "失敗", h.get("code", "")))
     return rows
+
+
+def _mark(tree, key: str, on: bool) -> None:
+    """選んだ行の札を [x] にして塗る。外したら戻す（乗せたときの hover の札は残す）"""
+    values = list(tree.item(key, "values"))
+    values[0] = PICK_ON if on else PICK_OFF
+    tags = [t for t in tree.item(key, "tags") if t != "picked"]
+    tree.item(key, values=values, tags=[*tags, "picked"] if on else tags)
+
+
+def _show_picked(label, names: list[str]) -> None:
+    """表の上に、選んでいる物の名前を並べる（どれを選んだかを、表を見回さなくても分かるように）"""
+    if names:
+        label.config(text=f"選んでいる物（{len(names)}）: " + "、".join(names), foreground=PICKED_FG, font=("", 9, "bold"))
+    else:
+        label.config(text="選んでいる物: なし", foreground=PLAIN_FG, font=("", 9))
 
 
 class LineBuffer:
@@ -297,6 +316,8 @@ class App:
 
         ttk.Label(tab, text="A・B の行を押すと選べます（[x] にした物を「選んだものを更新」で上げます）。"
                             "灰色の行（C・D・E と最新の物）は見るだけです").pack(side=tk.TOP, anchor=tk.W, pady=(8, 2))
+        self.picked_label = ttk.Label(tab, text="", wraplength=1120, justify=tk.LEFT)
+        self.picked_label.pack(side=tk.TOP, anchor=tk.W, pady=(0, 4))
         table = ttk.Frame(tab)
         table.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
         cols = [("pick", "選ぶ", 44), ("tier", "区分", 80), ("name", "名前", 300), ("installed", "入っている版", 120),
@@ -307,6 +328,7 @@ class App:
             self.tree.column(key, width=width, stretch=key in ("name", "note"), anchor=tk.CENTER if key == "pick" else tk.W)
         self.tree.tag_configure("plain", foreground=PLAIN_FG)
         self.tree.tag_configure("hover", background=HOVER_BG)
+        self.tree.tag_configure("picked", background=PICKED_BG, foreground=PICKED_FG, font=("", 9, "bold"))
         scroll = ttk.Scrollbar(table, orient=tk.VERTICAL, command=self.tree.yview)
         scroll.pack(side=tk.RIGHT, fill=tk.Y)
         self.tree.configure(yscrollcommand=scroll.set)
@@ -342,9 +364,7 @@ class App:
         if self.running:
             return
         self.picked.symmetric_difference_update({key})
-        values = list(self.tree.item(key, "values"))
-        values[0] = PICK_ON if key in self.picked else PICK_OFF
-        self.tree.item(key, values=values)
+        _mark(self.tree, key, key in self.picked)
         self._update_button_text()
 
     def _update_button_text(self) -> None:
@@ -352,6 +372,8 @@ class App:
         何も選ばずに押したら、選び方を出す"""
         n = len(self.picked)
         self.update_button.config(text=f"選んだものを更新 ({n})" if n else "選んだものを更新")
+        names = [self.tree.item(k, "values")[2] for k in self.tree.get_children() if k in self.picked]
+        _show_picked(self.picked_label, names)
 
     @staticmethod
     def _enable(button, on: bool) -> None:
@@ -373,7 +395,8 @@ class App:
         self.tree.delete(*self.tree.get_children())
         rows = table_rows(self.result, self.show_all.get(), self.picked)
         for key, values, pick in rows:
-            self.tree.insert("", tk.END, iid=key, values=values, tags=["pick"] if pick else ["plain"])
+            self.tree.insert("", tk.END, iid=key, values=values,
+                             tags=(["pick", "picked"] if key in self.picked else ["pick"]) if pick else ["plain"])
         self.summary.config(text=summary_text(self.result))
         self._update_button_text()
 
@@ -447,6 +470,9 @@ class App:
             intro = ("PATH と道具の環境変数を、レジストリから読んで見ています（ここでは書き換えません）。「直し方」は参考です。"
                      "PATH を書き換えると、関係の無いアプリまで起動しなくなることがあります。分からないときは触らずに、詳しい人に見てもらってください")
         ttk.Label(tab, text=intro, wraplength=1120, justify=tk.LEFT).pack(side=tk.TOP, anchor=tk.W, pady=(8, 4))
+        self.env_picked_label = ttk.Label(tab, text="", wraplength=1120, justify=tk.LEFT)
+        if self.env_can_fix:
+            self.env_picked_label.pack(side=tk.TOP, anchor=tk.W, pady=(0, 4))
 
         # 出力の欄と全文の行を、表より先に下に置く（出力の欄は書き換えるときだけ）
         self.env_output = None
@@ -478,6 +504,7 @@ class App:
         self.env_tree.tag_configure("warn", foreground="#8a5a00")
         self.env_tree.tag_configure("ok", foreground=PLAIN_FG)
         self.env_tree.tag_configure("hover", background=HOVER_BG)
+        self.env_tree.tag_configure("picked", background=PICKED_BG, foreground=PICKED_FG, font=("", 9, "bold"))
         scroll = ttk.Scrollbar(table, orient=tk.VERTICAL, command=self.env_tree.yview)
         scroll.pack(side=tk.RIGHT, fill=tk.Y)
         self.env_tree.configure(yscrollcommand=scroll.set)
@@ -514,14 +541,15 @@ class App:
         if self.fix_button is not None:
             n = len(self.env_picked)
             self.fix_button.config(text=f"選んだものを直す ({n})" if n else "選んだものを直す")
+            names = [f"{SCOPE_LABEL[self.env_found[i]['scope']]}の {self.env_found[i]['name']} {self.env_found[i]['value']}"
+                     for i in self.env_tree.get_children() if i in self.env_picked]
+            _show_picked(self.env_picked_label, names)
 
     def toggle_env(self, row: str) -> None:
         if self.running or not self.env_can_fix:
             return
         self.env_picked.symmetric_difference_update({row})
-        values = list(self.env_tree.item(row, "values"))
-        values[0] = PICK_ON if row in self.env_picked else PICK_OFF
-        self.env_tree.item(row, values=values)
+        _mark(self.env_tree, row, row in self.env_picked)
         self._show_fix_count()
 
     def show_env(self, found: list[dict] | None, error: Exception | None) -> None:
@@ -533,7 +561,8 @@ class App:
         self.env_found = {f["id"]: f for f in found}
         self.env_picked &= {f["id"] for f in found if f.get("fix")}
         for row, values, state, pick in env_rows(found, self.env_picked, self.env_can_fix):
-            self.env_tree.insert("", tk.END, iid=row, values=values, tags=[state, "pick"] if pick else [state])
+            self.env_tree.insert("", tk.END, iid=row, values=values,
+                                 tags=([state, "pick", "picked"] if row in self.env_picked else [state, "pick"]) if pick else [state])
         self.env_count.config(text=f"切れている・注意 {env.problems(found)} 件（行にマウスを乗せると、下に全文が出ます）")
         self._show_fix_count()
 
