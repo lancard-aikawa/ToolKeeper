@@ -6,16 +6,20 @@
 結果は <data>/history.jsonl に足す。
 """
 import codecs
+import queue
 import re
 import shutil
 import subprocess
 import sys
+import threading
+import time
 from pathlib import Path
 
 from . import check, cygwin, env, ghostscript, store, winget
 
 HISTORY_FILE = "history.jsonl"
 TAIL_LINES = 20
+TICK_SECONDS = 2.0
 # winget の終了コード（符号なし）。APPINSTALLER_CLI_ERROR_UPDATE_NOT_APPLICABLE（-1978335189）は
 # 「上げる物が無い」（ほかで先に上げた）なので失敗にしない
 NOT_APPLICABLE = {0x8A15002B}
@@ -57,20 +61,50 @@ def winget_args(winget_id: str) -> list[str]:
             "--accept-package-agreements", "--accept-source-agreements", "--disable-interactivity"]
 
 
-def _stream(args: list[str], out) -> tuple[int, str]:
-    """出力をそのまま流しながら、最後の TAIL_LINES 行を覚える（winget の進み具合は \\r で上書きされる）"""
+def tick_text(seconds: float) -> str:
+    m, s = divmod(int(seconds), 60)
+    return f"\r  {m}:{s:02} 経過（winget は取り込みとインストールの間、進み具合を出しません）"
+
+
+def _stream(args: list[str], out, tick: float = TICK_SECONDS, clock=time.monotonic) -> tuple[int, str]:
+    """出力をそのまま流しながら、最後の TAIL_LINES 行を覚える（winget の進み具合は \\r で上書きされる）。
+
+    winget は出力の先がパイプだと取り込みの進み具合を出さず、FFmpeg（約 200 MB）では「ダウンロード中 <URL>」のあと
+    3 分なにも出なかった（2026-10-29。止まって見えた）。インストーラが動いている間も出ない（Rustup は隠れたコンソールで
+    古い部品 5,895 個を 15 分以上かけて消していた）。そこで、出力が行の終わりで止まっている間は tick 秒ごとに
+    \\r で経過を書く。次に winget が書くときは前に \\r を付けて、経過の行を上書きさせる。経過は tail に入れない"""
     p = subprocess.Popen(args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
                          creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    chunks: queue.Queue = queue.Queue()
+
+    def read():
+        while True:
+            chunk = p.stdout.read1(4096) if hasattr(p.stdout, "read1") else p.stdout.read(4096)
+            chunks.put(chunk)
+            if not chunk:
+                return
+
+    threading.Thread(target=read, daemon=True).start()
     dec = codecs.getincrementaldecoder("utf-8")(errors="replace")
-    text = ""
+    text, ticking, start = "", False, clock()
     while True:
-        chunk = p.stdout.read1(4096) if hasattr(p.stdout, "read1") else p.stdout.read(4096)
+        try:
+            chunk = chunks.get(timeout=tick)
+        except queue.Empty:
+            if not text or text.endswith("\n"):
+                out.write(tick_text(clock() - start))
+                out.flush()
+                ticking = True
+            continue
         if not chunk:
             break
         s = dec.decode(chunk)
         text += s
-        out.write(s)
+        out.write(("\r" if ticking else "") + s)
         out.flush()
+        ticking = False
+    if ticking:
+        out.write("\r\n")
     code = p.wait()
     lines = [winget._clean(x) for x in text.replace("\r\n", "\n").split("\n")]
     tail = "\n".join([x for x in lines if x.strip()][-TAIL_LINES:])

@@ -177,3 +177,35 @@ class Exclusive(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class Stream(unittest.TestCase):
+    """winget は取り込み中に何も出さないので、黙っている間は経過を出す（2026-10-29 FFmpeg が 3 分止まって見えた）"""
+    SCRIPT = ("import sys, time; sys.stdout.write('ダウンロード中 x\\n'); sys.stdout.flush(); time.sleep(0.6); "
+              "sys.stdout.write('検証しました\\n'); sys.stdout.flush()")
+
+    def run_stream(self, script):
+        import sys
+        out = io.StringIO()
+        with mock.patch.dict("os.environ", {"PYTHONIOENCODING": "utf-8"}):
+            code, tail = update._stream([sys.executable, "-c", script], out, tick=0.1)
+        return code, tail, out.getvalue()
+
+    def test_ticks_while_silent(self):
+        code, tail, shown = self.run_stream(self.SCRIPT)
+        self.assertEqual(code, 0)
+        self.assertIn("経過（winget は取り込みとインストールの間、進み具合を出しません）", shown)
+        self.assertEqual(tail, "ダウンロード中 x\n検証しました")  # 経過は残さない
+        from toolkeeper import gui
+        lines, partial = gui.LineBuffer().feed(shown)
+        self.assertEqual([x for x in lines if x.strip()], ["ダウンロード中 x", "検証しました"])
+        self.assertEqual(partial, "")
+
+    def test_no_tick_in_the_middle_of_a_line(self):
+        """winget が行の途中（自分の進み具合）で止まっているときは、経過を書き込まない"""
+        script = "import sys, time; sys.stdout.write('50%'); sys.stdout.flush(); time.sleep(0.5); sys.stdout.write('\\n')"
+        _code, _tail, shown = self.run_stream(script)
+        self.assertNotIn("経過", shown)
+
+    def test_tick_text(self):
+        self.assertEqual(update.tick_text(130.7), "\r  2:10 経過（winget は取り込みとインストールの間、進み具合を出しません）")
