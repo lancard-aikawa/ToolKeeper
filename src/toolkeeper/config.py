@@ -45,6 +45,9 @@ DEFAULTS: dict = {
         "visualstudio2019buildtools": "Microsoft.VisualStudio.2019.BuildTools",
     },
     "cache_hours": 24,
+    # 環境変数と PATH（§3.7）: 見る変数と、PATH に 2 つあるかを見るコマンド
+    "env_vars": ["JAVA_HOME", "JDK_HOME", "JRE_HOME", "PHPRC", "GS_LIB", "PYTHONHOME", "PYTHONPATH", "NODE_PATH", "PERL5LIB"],
+    "env_commands": ["php", "java", "javac", "python", "node", "git", "gh", "perl", "cmake", "ffmpeg", "gswin64c", "7z"],
 }
 
 

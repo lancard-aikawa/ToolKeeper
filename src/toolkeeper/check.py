@@ -3,11 +3,10 @@
 取得元ごとに独立して動かす。1 つが失敗しても残りは出し、失敗した物は failed に理由を付けて出す。
 何かを入れる処理はここから呼ばない（§4）。
 """
-import shutil
 import subprocess
 from pathlib import Path
 
-from . import __version__, choco, cygwin, eol, ghostscript, store, winget
+from . import __version__, choco, cygwin, env, eol, ghostscript, store, winget
 
 SCHEMA = 1
 CHECK_FILE = "check.json"
@@ -26,10 +25,13 @@ class Sources:
     cyg_latest = staticmethod(cygwin.latest)
     cyg_running = staticmethod(cygwin.running)
 
+    env_registry = staticmethod(env.read_registry)
+
     @staticmethod
     def php() -> tuple[str, str] | None:
-        """PATH の php の (版, パス)。無ければ None"""
-        exe = shutil.which("php")
+        """PATH の php の (版, パス)。無ければ None。
+        PATH はレジストリから読む（起動した側の古い PATH だと、乗り換え前の PHP が出る。§3.7）"""
+        exe = env.which("php")
         if not exe:
             return None
         r = subprocess.run([exe, "-r", "echo PHP_VERSION;"], capture_output=True, text=True, timeout=30,
@@ -176,6 +178,17 @@ def _choco(cfg, src, items, failed):
         items.append(_item(f"choco:{r['name']}", "D", r["name"], r["version"], r["available"], True, notes=notes))
 
 
+def _env(cfg, src, data, t, failed) -> int:
+    """環境変数と PATH（§3.7）。パスを含むので check.json には数だけを出し、中身は env.json に書く"""
+    try:
+        found = env.inspect(src.env_registry(), cfg["env_vars"], cfg["env_commands"])
+    except Exception as e:  # noqa: BLE001
+        failed.append({"source": "環境変数", "reason": _reason(e)})
+        return 0
+    store.write_json(data / env.ENV_FILE, {"checked_at": store.iso(t), "items": found})
+    return env.problems(found)
+
+
 TIER_ORDER = {"E": 0, "A": 1, "B": 2, "C": 3, "D": 4}
 
 
@@ -190,6 +203,7 @@ def run(cfg: dict, data: Path, src: Sources | None = None) -> dict:
     _ghostscript(cfg, src, cache, items, failed)
     _cygwin(cfg, src, cache, items, failed)
     _choco(cfg, src, items, failed)
+    env_count = _env(cfg, src, data, t, failed)
 
     prev = store.read_json(data / CHECK_FILE) or {}
     before = {it.get("key"): it.get("latest") for it in prev.get("items") or [] if it.get("updatable")}
@@ -206,6 +220,7 @@ def run(cfg: dict, data: Path, src: Sources | None = None) -> dict:
             "eol": sum(1 for it in items if it["eol"] and it["eol"]["state"] in ("ended", "soon")),
             "new": sum(1 for it in items if it["new"]),
             "failed": len(failed),
+            "env": env_count,
         },
         "items": items,
         "failed": failed,

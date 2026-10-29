@@ -18,11 +18,11 @@ from pathlib import Path
 import tkinter as tk
 from tkinter import messagebox, ttk
 
-from . import __version__, check, cygwin, store, update
+from . import __version__, check, cygwin, env, store, update
 from . import config as cfgmod
 from . import status as statusmod
 from .ghostscript import _ps51_env
-from .labels import TIER_LABEL, can_update, note_text
+from .labels import ENV_KIND, ENV_STATE, SCOPE_LABEL, TIER_LABEL, can_update, note_text
 from .paths import APP_DIR, data_dir
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
@@ -69,9 +69,17 @@ def summary_text(result: dict | None) -> str:
     s = result["summary"]
     text = (f"調べた時刻 {result['checked_at'].replace('T', ' ')[:16]}　更新できる {s['updatable']}　"
             f"サポート終了 {s['eol']}　新しい {s['new']}")
+    if s.get("env"):
+        text += f"　環境の注意 {s['env']}（環境のタブ）"
     if result.get("failed"):
         text += "　調べられなかった: " + "、".join(f["source"] for f in result["failed"])
     return text
+
+
+def env_rows(found: list[dict]) -> list[tuple[tuple, str]]:
+    """環境のタブの行: (状態・種類・範囲・名前・値・説明, 色の札)。並びは env.inspect のまま（切れている物が先）"""
+    return [((ENV_STATE[f["state"]], ENV_KIND[f["kind"]], SCOPE_LABEL[f["scope"]], f["name"], f["value"], f["detail"]),
+             f["state"]) for f in found]
 
 
 def history_rows(path: Path, limit: int = 500) -> list[tuple]:
@@ -134,6 +142,7 @@ class App:
         nb.pack(side=tk.TOP, fill=tk.BOTH, expand=True, padx=8, pady=(8, 0))
         self.notebook = nb
         self._build_tools(nb)
+        self._build_env(nb)
         self._build_history(nb)
 
         self._after = self.root.after(100, self._poll)
@@ -397,6 +406,63 @@ class App:
             return
         os.startfile(log)  # noqa: S606  既定のアプリで開く（Windows）
 
+    # ---- 環境のタブ（§3.7）
+
+    def _build_env(self, nb: ttk.Notebook) -> None:
+        tab = ttk.Frame(nb, padding=10)
+        nb.add(tab, text="環境")
+        top = ttk.Frame(tab)
+        top.pack(side=tk.TOP, fill=tk.X)
+        reread = ttk.Button(top, text="読み直す", command=self.reload_env, cursor="hand2")
+        reread.pack(side=tk.LEFT)
+        self.env_count = ttk.Label(top, text="")
+        self.env_count.pack(side=tk.LEFT, padx=(10, 0))
+        ttk.Label(tab, text="PATH と道具の環境変数を、レジストリから読んで見ています（ここでは書き換えません）。"
+                            "変更は新しく開いたプログラムにだけ届きます。開いたままのターミナルや VS Code は開き直してください",
+                  wraplength=900, justify=tk.LEFT).pack(side=tk.TOP, anchor=tk.W, pady=(8, 4))
+        table = ttk.Frame(tab)
+        table.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
+        # 値と説明は長いので、乗せた行の全文を表の下に出す（押す物ではないので、色も指のカーソルも変えない）
+        self.env_full = ttk.Label(tab, text="", foreground="#555555", wraplength=980, justify=tk.LEFT)
+        self.env_full.pack(side=tk.BOTTOM, anchor=tk.W, fill=tk.X, pady=(6, 0))
+        cols = [("state", "状態", 76), ("kind", "種類", 92), ("scope", "範囲", 62), ("name", "名前", 90),
+                ("value", "値", 380), ("detail", "説明", 300)]
+        self.env_tree = ttk.Treeview(table, columns=[c[0] for c in cols], show="headings", selectmode="browse")
+        for key, label, width in cols:
+            self.env_tree.heading(key, text=label)
+            self.env_tree.column(key, width=width, stretch=key in ("value", "detail"))
+        self.env_tree.tag_configure("bad", foreground="#b00020")
+        self.env_tree.tag_configure("warn", foreground="#8a5a00")
+        self.env_tree.tag_configure("ok", foreground=PLAIN_FG)
+        scroll = ttk.Scrollbar(table, orient=tk.VERTICAL, command=self.env_tree.yview)
+        scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.env_tree.configure(yscrollcommand=scroll.set)
+        self.env_tree.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        self.env_tree.bind("<Motion>", self._env_motion)
+        self.env_tree.bind("<Leave>", lambda _e: self.env_full.config(text=""))
+
+    def _env_motion(self, event) -> None:
+        row = self.env_tree.identify_row(event.y)
+        if not row:
+            self.env_full.config(text="")
+            return
+        v = self.env_tree.item(row, "values")
+        self.env_full.config(text=f"{v[3]}: {v[4]}" + (f"\n{v[5]}" if v[5] else ""))
+
+    def show_env(self, found: list[dict] | None, error: Exception | None) -> None:
+        self.env_tree.delete(*self.env_tree.get_children())
+        if error:
+            self.env_count.config(text=f"読めません: {error}")
+            return
+        for values, state in env_rows(found):
+            self.env_tree.insert("", tk.END, values=values, tags=[state])
+        self.env_count.config(text=f"切れている・注意 {env.problems(found)} 件（行にマウスを乗せると、下に全文が出ます）")
+
+    def reload_env(self) -> None:
+        """レジストリを読んでファイルの有無を見るだけなので CLI を挟まない（速い）。それでも画面は止めない"""
+        vars_, cmds = list(self.cfg["env_vars"]), list(self.cfg["env_commands"])
+        self._run_in_background(lambda: env.inspect(env.read_registry(), vars_, cmds), self.show_env)
+
     # ---- 履歴のタブ
 
     def _build_history(self, nb: ttk.Notebook) -> None:
@@ -445,6 +511,7 @@ class App:
         self.picked &= live
         self.show_table()
         self.show_history()
+        self.reload_env()
         cfg, data = dict(self.cfg), self.data
         self._run_in_background(lambda: statusmod.run(cfg, data), self._show_status)
 

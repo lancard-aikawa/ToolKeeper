@@ -57,6 +57,21 @@ class Rows(unittest.TestCase):
         self.assertIn("まだ調べていません", gui.summary_text(None))
 
 
+class EnvRows(unittest.TestCase):
+    def test_labels_and_tags(self):
+        rows = gui.env_rows([
+            {"state": "bad", "kind": "path-missing", "scope": "machine", "name": "PATH", "value": r"C:\Python313\Scripts", "detail": "フォルダが無い"},
+            {"state": "ok", "kind": "var", "scope": "user", "name": "PHPRC", "value": r"C:\work\php-conf", "detail": ""},
+        ])
+        self.assertEqual(rows[0], (("切れている", "PATH の切れ", "マシン", "PATH", r"C:\Python313\Scripts", "フォルダが無い"), "bad"))
+        self.assertEqual(rows[1][0][:3], ("正しい", "変数", "ユーザー"))
+
+    def test_summary_mentions_env_only_when_some(self):
+        self.assertNotIn("環境", gui.summary_text(RESULT))
+        r = dict(RESULT, summary=dict(RESULT["summary"], env=3))
+        self.assertIn("環境の注意 3", gui.summary_text(r))
+
+
 class Lines(unittest.TestCase):
     def test_progress_is_overwritten(self):
         buf = gui.LineBuffer()
@@ -94,6 +109,11 @@ class Window(unittest.TestCase):
         except tk.TclError as e:
             self.skipTest(f"Tk を開けません: {e}")
         self.root.withdraw()
+        # 本物のレジストリは見ない（環境のタブは裏のスレッドで読むので、窓を閉じるまで差し替えておく）
+        self.env_patch = mock.patch.object(gui.env, "inspect", return_value=[
+            {"state": "warn", "kind": "shadow", "scope": "", "name": "cmake", "value": r"C:\Strawberry\c\bin\cmake.exe", "detail": "x"}])
+        self.env_patch.start()
+        self.addCleanup(self.env_patch.stop)
         with mock.patch.object(gui.statusmod, "run", return_value={
                 "toolkeeper": "0.1.0", "schema": 1, "data_dir": str(self.data), "last_check": None,
                 "task": {"registered": False}, "sources": {"winget": "1.29.380", "choco": None, "cygwin": None, "ghostscript": False}}):
@@ -169,6 +189,18 @@ class Window(unittest.TestCase):
         warn.assert_called_once()
         ask.assert_not_called()
         run.assert_not_called()
+
+    def test_env_tab_shows_rows(self):
+        app = self.app
+        for _ in range(50):  # 裏のスレッドの結果は _poll（100 ms ごと）で受け取る
+            self.root.update()
+            if app.env_tree.get_children():
+                break
+            self.root.after(20)
+        rows = app.env_tree.get_children()
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(app.env_tree.item(rows[0], "tags"), ("warn",))
+        self.assertIn("1 件", app.env_count.cget("text"))
 
     def test_footer_stays_inside_small_window(self):
         """下のボタン行が、窓を小さくしても外に押し出されない"""

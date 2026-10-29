@@ -2,6 +2,11 @@
 
 TIER_LABEL = {"A": "A 専用", "B": "B winget", "C": "C winget", "D": "D choco", "E": "E 乗り換え"}
 EOL_LABEL = {"ended": "サポート終了", "soon": "もうすぐ終了"}
+# 環境変数と PATH（§3.7）
+ENV_STATE = {"bad": "切れている", "warn": "注意", "info": "整理できる", "ok": "正しい"}
+ENV_KIND = {"var": "変数", "path-missing": "PATH の切れ", "path-dup": "PATH の重複", "path-versioned": "PATH の版",
+            "shadow": "2 つある"}
+SCOPE_LABEL = {"machine": "マシン", "user": "ユーザー", "": "-"}
 
 
 def can_update(it: dict) -> bool:

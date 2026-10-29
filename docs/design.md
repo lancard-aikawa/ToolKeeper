@@ -145,6 +145,33 @@ winget の ID と系列の対応は設定 §6 の `eol` に正規表現で書く
 - サポート終了の物は区分を E にする。サポート中で更新も無い物は出さない
 - 手で入れた PHP（§3.2 の乗り換え前）は、endoflife.date の系列の `latest` を最新とみなす
 
+### 3.7 環境変数と PATH
+
+道具を上げると、版の入ったフォルダの名前が変わることがある（Microsoft の OpenJDK は `C:\Program Files\Microsoft\jdk-21.0.9.10-hotspot`）。
+そのフォルダを指す環境変数や PATH の行は、更新した時点で切れる。また、同じコマンドが PATH に 2 つあると、上げた方ではない方が使われる。
+これらを `check` のたびに見て、`<data>/env.json` に書く。
+
+**PATH と環境変数はレジストリから読む**（マシンは `HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment`、ユーザーは `HKCU\Environment`）。
+ToolKeeper のプロセスの環境は、起動した側が開いたときの古い値のことがある（§5 の末尾。2026-10-28、PHP の乗り換えのあとに古い PHP が出た）。
+PATH はマシン → ユーザーの順に並べ、`%...%` を展開する。PHP の場所（§3.2）もこの PATH で探す。
+
+見る物:
+
+| 種類 | 中身 | 状態 |
+|---|---|---|
+| 変数 | 設定 `env_vars` の名前（`JAVA_HOME`・`PHPRC` など）がマシンかユーザーにあれば、値と、指す先があるか | 無い先を指していれば「切れている」。版の入ったフォルダ（`\d+\.\d+\.\d+` を含む）を指していれば「更新で切れうる」。ほかは「正しい」 |
+| PATH の切れ | PATH の行のフォルダが無い | 切れている |
+| PATH の重複 | 同じフォルダ（大文字小文字・末尾の `\`・`%SystemRoot%` を揃えて比べる）が 2 回ある。後ろの方を出す | 整理できる（後ろの方は使われないので害は無い。数えない） |
+| PATH の版 | 版の入ったフォルダの行 | 更新で切れうる |
+| 2 つある | 設定 `env_commands` のコマンドが PATH の 2 つ以上のフォルダにある。前の方が使われる | 注意 |
+
+- Ghostscript の `gs<版>\bin` は、ToolKeeper の更新が PATH を書き換える（§3.3）ので「更新で切れうる」にしない
+- 2 つあるの判定では、`%LOCALAPPDATA%\Microsoft\WindowsApps` の物（ストアのアプリの呼び出し口）は、先頭でなければ数えない
+- 2026-10-29 の手元では、`cmake` は Strawberry Perl の `C:\Strawberry\c\bin` の物が Kitware の CMake より先に見つかり、
+  ユーザーの PATH に `jdk-21.0.9.10-hotspot\bin` がマシンと重ねて書いてあり、`JAVA_HOME` が `jdk-21.0.9.10-hotspot` を指していた
+- `check.json` にはパスを入れない（§9.1）ので、`summary.env` に「切れている」と注意の数だけを出す
+- 直すのは画面からだけ（§8）。定期の実行では直さない（§4）
+
 ## 4. 守ること
 
 - **定期の実行（タスク）は調べるだけで、何も入れない。**入れるのは、人が画面で押したときか、`toolkeeper update` を手で打ったときだけ
@@ -160,6 +187,7 @@ winget の ID と系列の対応は設定 §6 の `eol` に正規表現で書く
 toolkeeper check            # 全部を調べ、<data>/check.json に書く。前回から増えた更新を出す
 toolkeeper list             # check.json を表で出す
 toolkeeper update <キー>... # 選んだものを上げる（キーは winget:<ID>、php、ghostscript、cygwin）
+toolkeeper env              # 環境変数と PATH を調べて出す（§3.7。ネットに出ない、何も書き換えない）
 toolkeeper status --json    # 使える状態か（RepoTether の「確かめる」が呼ぶ、§9）
 toolkeeper gui              # 画面
 ```
@@ -177,7 +205,8 @@ toolkeeper gui              # 画面
   登録するのは `check` だけで、`update` は登録しない（§4）。窓を出さないよう、LockWatch と同じく本体の `pythonw.exe`（`scripts/find-pythonw.ps1` が探す）で
   `scripts/toolkeeper-launch.py --log check` を動かす。`--log` は出力を `<data>/last-run.log` に書く（`pythonw` では標準出力が捨てられる）
 - タスクはレジストリから環境を組み立て直して動くので、PATH を変えたあとでも新しい値で調べる。手で開いたままのターミナルから `check` を流すと、
-  開いたときの古い PATH で調べる（2026-10-28、PHP の乗り換えのあとに古い PHP が「手で入れた物」として出た）
+  開いたときの古い PATH で調べる（2026-10-28、PHP の乗り換えのあとに古い PHP が「手で入れた物」として出た）。
+  そのため PATH はレジストリから読み直す（§3.7）
 
 `check.json` の形は §9.1。
 
@@ -193,6 +222,8 @@ toolkeeper gui              # 画面
 | `eol` | §3.6 の 5 つ（Node.js・Python・PHP・Microsoft の OpenJDK・Temurin） | `{"id": 正規表現, "product": endoflife.date の製品}` の並び |
 | `choco_twins` | gh・marktext・microsoft-openjdk17・microsoft-openjdk-21・python314・Temurin11・visualstudio2019buildtools | choco の名前 → winget の ID（版が一致した物を 2026-10-28 に確かめた） |
 | `cache_hours` | `24` | `setup.xz`・endoflife.date・GitHub を取り直す間隔 |
+| `env_vars` | `JAVA_HOME`・`JDK_HOME`・`JRE_HOME`・`PHPRC`・`GS_LIB`・`PYTHONHOME`・`PYTHONPATH`・`NODE_PATH`・`PERL5LIB` | 見る環境変数（§3.7） |
+| `env_commands` | `php`・`java`・`javac`・`python`・`node`・`git`・`gh`・`perl`・`cmake`・`ffmpeg`・`gswin64c`・`7z` | PATH に 2 つあるかを見るコマンド（§3.7）。`bash`・`tar` などは Windows の物が先にあるのが普通なので入れない |
 
 ファイルに書いたキーだけ既定値を置き換える。並びや表は丸ごと置き換える（足し合わせない）。全部の既定値は `toolkeeper.sample.json`。
 
@@ -230,6 +261,11 @@ tkinter。LockWatch と同じ決まり（絵文字を使わない、下のボタ
   `toolkeeper update <キー>...` を別のプロセスで呼ぶ
 - 動かした仕事の出力は下の欄に流す。winget の進み具合（`\r` で上書きされる行）は下のステータス行に出す
 - 仕事が動いている間は、ボタンを押せない状態にする
+
+環境のタブ: §3.7 の結果を表に（状態・種類・範囲（マシン・ユーザー）・名前・値・説明）。開いたときと「調べ直す」で、レジストリから読み直す（速いので CLI を挟まない）。
+切れている物を先に、正しい変数を最後に並べる。切れている行は赤、注意の行は茶、正しい行は灰色。
+値と説明は長いので、行にマウスを乗せると表の下に全文を出す（押す物ではないので、行の色も指のカーソルも変えない）。
+上に「新しく開いたプログラムにだけ届く。開いたままのターミナルや VS Code は開き直す」と書く。
 
 履歴のタブ: `history.jsonl` を新しい順に（時刻・キー・前・後・結果・終了コード）。失敗した行は赤。
 
@@ -290,6 +326,7 @@ RepoTether（`../RepoTether`）の「脆弱性」タブの隣に「道具」タ�
 - `notes` は短い印の並び: `twin:<key>`（choco と winget で二重）、`pinned`（choco の pin）、`pinned:<件数>`（winget の pin。`key` が `winget:(pinned)` の行）、
   `running:<名前>`（Cygwin のプロセスが動いている）、`manual`（手で入れた PHP。§7 の乗り換え）、`old:<版>`（Ghostscript の古い版も入っている）
 - `failed` は調べられなかった取得元と理由。1 つが失敗しても `items` は残りの分を出す
+- `summary.env` は環境変数と PATH（§3.7）で「切れている」と注意の数（後から足したので、無ければ 0 とみなす）。中身は `<data>/env.json`（パスを含むので RepoTether には渡さない）
 - 手元のパスは入れない（RepoTether が画面の画像を撮ることがあるため。場所は `status` で返す）
 
 ### 9.2 `toolkeeper status --json`

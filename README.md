@@ -14,6 +14,7 @@ set PYTHONPATH=src
 python -m toolkeeper check                 # 全部を調べ、data\check.json に書く
 python -m toolkeeper list --all            # 前回の結果を表で出す（--all で C・D も）
 python -m toolkeeper update winget:Gyan.FFmpeg ghostscript cygwin   # 選んだ物を上げる（区分 A・B だけ）
+python -m toolkeeper env                   # 道具の環境変数と PATH の切れ・重複・2 つある物を出す（書き換えない）
 python -m toolkeeper status --json         # 使える状態か
 ```
 

@@ -73,6 +73,12 @@ class Fake(check.Sources):
     def eol(self, cache, hours, today):
         return FakeLookup(self.over.get("eol_fail", ()))
 
+    def env_registry(self):
+        if "env" in self.over:
+            raise self.over["env"]
+        # 無いフォルダを指す変数 1 つ（切れている）だけ
+        return {"machine": {"JAVA_HOME": r"Z:\nowhere\jdk-21.0.9.10-hotspot"}, "user": {}}
+
 
 class Run(unittest.TestCase):
     def setUp(self):
@@ -150,7 +156,7 @@ class Run(unittest.TestCase):
         r = self.run_check()
         # A: php・ghostscript・cygwin、B: 7zip・FFmpeg・gh・OpenJDK 17・Python Launcher
         # サポート終了: Node.js 20（終了）と OpenJDK 17（材料では 2027-01-15 で、90 日以内）
-        self.assertEqual(r["summary"], {"updatable": 8, "eol": 2, "new": 0, "failed": 0})
+        self.assertEqual(r["summary"], {"updatable": 8, "eol": 2, "new": 0, "failed": 0, "env": 1})
         jdk = self.by_key(r)["winget:Microsoft.OpenJDK.17"]
         self.assertEqual((jdk["tier"], jdk["eol"]["state"]), ("B", "soon"))
         self.assertEqual(r["schema"], check.SCHEMA)
@@ -183,6 +189,18 @@ class Run(unittest.TestCase):
         r = self.run_check()
         self.assertEqual(sorted(it["key"] for it in r["items"] if it["new"]), ["ghostscript", "winget:Gyan.FFmpeg"])
         self.assertEqual(r["summary"]["new"], 2)
+
+    def test_env_goes_to_env_json(self):
+        """パスを含むので check.json には数だけ（§3.7）"""
+        self.run_check()
+        found = json.loads((self.data / "env.json").read_text(encoding="utf-8"))["items"]
+        self.assertEqual([(f["name"], f["state"]) for f in found], [("JAVA_HOME", "bad")])
+
+    def test_env_failure_keeps_others(self):
+        r = self.run_check(env=OSError("読めない"))
+        self.assertIn("環境変数", [f["source"] for f in r["failed"]])
+        self.assertEqual(r["summary"]["env"], 0)
+        self.assertIn("cygwin", self.by_key(r))
 
     def test_no_local_paths_in_check_json(self):
         """RepoTether が画面の画像を撮ることがあるので、手元のパスを入れない（§9.1）"""

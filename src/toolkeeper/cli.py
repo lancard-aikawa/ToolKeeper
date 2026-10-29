@@ -7,8 +7,9 @@ import traceback
 from pathlib import Path
 
 from . import __version__, check, store, winget
-from .labels import TIER_LABEL, note_text
+from .labels import ENV_KIND, ENV_STATE, SCOPE_LABEL, TIER_LABEL, note_text
 from . import config as cfgmod
+from . import env as envmod
 from . import status as statusmod
 from . import update as updatemod
 from .paths import data_dir, default_config_path
@@ -32,6 +33,7 @@ def _build_parser() -> argparse.ArgumentParser:
     up = sub.add_parser("update", help="選んだ物を上げる（区分 A・B だけ）。終わったら調べ直す")
     up.add_argument("keys", nargs="+", metavar="キー", help="check.json の key（winget:<ID> など）")
     up.add_argument("--no-check", action="store_true", help="終わったあとに調べ直さない")
+    sub.add_parser("env", help="道具にかかわる環境変数と PATH をレジストリから読んで出す（何も書き換えない）")
     st = sub.add_parser("status", help="使える状態か")
     st.add_argument("--json", action="store_true", help="JSON で出す")
     sub.add_parser("gui", help="画面を開く（pythonw で scripts/toolkeeper-launch.py gui なら黒い窓が出ない）")
@@ -52,7 +54,7 @@ def _fit(s: str, n: int, right: bool = False) -> str:
 def _print_table(result: dict, show_all: bool) -> None:
     s = result["summary"]
     print(f"調べた時刻 {result['checked_at']}  更新できる {s['updatable']}  サポート終了 {s['eol']}  "
-          f"新しい {s['new']}  失敗 {s['failed']}")
+          f"新しい {s['new']}  失敗 {s['failed']}  環境 {s.get('env', 0)}（toolkeeper env）")
     rows = [it for it in result["items"]
             if show_all or it["tier"] in ("A", "B", "E") or (it.get("eol") and it["eol"]["state"] != "ok")]
     for it in rows:
@@ -127,6 +129,13 @@ def _dispatch(args, cfg: dict, data: Path) -> int:
             print("まだ調べていません（toolkeeper check）", file=sys.stderr)
             return EXIT_USAGE
         _print_table(result, show_all=args.all)
+        return EXIT_OK
+    if args.command == "env":
+        found = envmod.inspect(envmod.read_registry(), cfg["env_vars"], cfg["env_commands"])
+        for f in found:
+            print(f"{_fit(ENV_STATE[f['state']], 10)} {_fit(ENV_KIND[f['kind']], 12)} {_fit(SCOPE_LABEL[f['scope']], 8)} "
+                  f"{_fit(f['name'], 10)} {f['value']}" + (f"\n{' ' * 42}{f['detail']}" if f["detail"] else ""))
+        print(f"切れている・注意 {envmod.problems(found)} 件（変更は新しく開いたプログラムにだけ届く）")
         return EXIT_OK
     if args.command == "status":
         st = statusmod.run(cfg, data)
