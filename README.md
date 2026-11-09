@@ -19,7 +19,7 @@ python -m toolkeeper env --fix <ID>        # 直し方のある行を直す（�
 python -m toolkeeper status --json         # 使える状態か
 ```
 
-画面の「環境」タブは既定では見るだけ。画面から直す・戻すを出すには、`toolkeeper.json` に `"env_fix": true` を書く
+画面の「環境変数」タブは既定では見るだけ（行を右クリックすると値・説明・直し方をコピーできる）。画面から直す・戻すを出すには、`toolkeeper.json` に `"env_fix": true` を書く
 （PATH を壊すと関係の無いアプリまで起動しなくなるので、分かる人だけ）。
 
 `uv` があるなら `uv run toolkeeper check` でもよい。

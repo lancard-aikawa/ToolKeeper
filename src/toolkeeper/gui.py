@@ -74,14 +74,14 @@ def summary_text(result: dict | None) -> str:
     text = (f"調べた時刻 {result['checked_at'].replace('T', ' ')[:16]}　更新できる {s['updatable']}　"
             f"サポート終了 {s['eol']}　新しい {s['new']}")
     if s.get("env"):
-        text += f"　環境の注意 {s['env']}（環境のタブ）"
+        text += f"　環境変数の注意 {s['env']}（環境変数のタブ）"
     if result.get("failed"):
         text += "　調べられなかった: " + "、".join(f["source"] for f in result["failed"])
     return text
 
 
 def env_rows(found: list[dict], picked: set[str], fixable: bool = True) -> list[tuple[str, tuple, str, bool]]:
-    """環境のタブの行: (ID, 選ぶ・状態・種類・範囲・名前・値・説明・直し方, 色の札, 押せるか)。
+    """環境変数のタブの行: (ID, 選ぶ・状態・種類・範囲・名前・値・説明・直し方, 色の札, 押せるか)。
     並びは env.inspect のまま（切れている物が先）。押せるのは、設定 env_fix が true で、直し方が決まっている行だけ"""
     rows = []
     for f in found:
@@ -90,6 +90,23 @@ def env_rows(found: list[dict], picked: set[str], fixable: bool = True) -> list[
         rows.append((f["id"], (mark, ENV_STATE[f["state"]], ENV_KIND[f["kind"]], SCOPE_LABEL[f["scope"]], f["name"],
                                f["value"], f["detail"], env.fix_text(f)), f["state"], pick))
     return rows
+
+
+# 環境変数のタブの右クリックで写せる物: (何を, メニューの名前)
+ENV_COPY = [("value", "コピー（値）"), ("detail", "コピー（説明）"), ("fix", "コピー（直し方）"), ("all", "コピー（行全体）")]
+
+
+def env_copy_text(f: dict, what: str) -> str:
+    """右クリックで写す文字。all は表の 1 行を「見出し: 中身」で並べる（空の欄は省く）"""
+    if what == "value":
+        return f["value"] or ""
+    if what == "detail":
+        return f["detail"] or ""
+    if what == "fix":
+        return env.fix_text(f)
+    parts = [("状態", ENV_STATE[f["state"]]), ("種類", ENV_KIND[f["kind"]]), ("範囲", SCOPE_LABEL[f["scope"]]),
+             ("名前", f["name"]), ("値", f["value"]), ("説明", f["detail"]), ("直し方", env.fix_text(f))]
+    return "\n".join(f"{k}: {v}" for k, v in parts if v and v != "-")
 
 
 def firewall_rows(rows: list[dict], tools_only: bool) -> list[tuple[str, tuple, str]]:
@@ -163,7 +180,7 @@ def result_text(path: Path, since: str, keys: list[str], names: dict[str, str]) 
         parts += ["" if parts else None, f"{names.get(h['key'], h['key'])} のインストーラが環境変数を書き換えました:",
                   *[f"  {env.change_text(c)}" for c in h["env"]]]
     if changed:
-        parts += ["", "普段使う版が変わっていないかを「環境」のタブで確かめてください"]
+        parts += ["", "普段使う版が変わっていないかを「環境変数」のタブで確かめてください"]
     parts += ["", "出力は下の欄に、記録は「履歴」のタブにあります"]
     return "\n".join(p for p in parts if p is not None), bool(failed), admin
 
@@ -545,11 +562,11 @@ class App:
             return
         os.startfile(log)  # noqa: S606  既定のアプリで開く（Windows）
 
-    # ---- 環境のタブ（§3.7）
+    # ---- 環境変数のタブ（§3.7）
 
     def _build_env(self, nb: ttk.Notebook) -> None:
         tab = ttk.Frame(nb, padding=10)
-        nb.add(tab, text="環境")
+        nb.add(tab, text="環境変数")
         # 書き換えは、設定 env_fix を true にした人にだけ出す（PATH を壊すと関係の無いアプリまで動かなくなり、
         # 素人には原因が分からない。既定は見るだけ。§3.7）
         self.env_can_fix = bool(self.cfg.get("env_fix"))
@@ -616,6 +633,32 @@ class App:
         self.env_tree.bind("<Button-1>", self._env_click)
         self.env_tree.bind("<Motion>", self._env_motion)
         self.env_tree.bind("<Leave>", lambda _e: self._env_hover(None))
+        # 表の文字は選べないので、値・説明・直し方は右クリックで写す
+        self.env_menu = tk.Menu(self.root, tearoff=False)
+        for what, label in ENV_COPY:
+            self.env_menu.add_command(label=label, command=lambda w=what: self.copy_env(self.env_menu_row, w))
+        self.env_menu_row = None
+        self.env_tree.bind("<Button-3>", self._env_menu)
+
+    def _env_menu(self, event) -> None:
+        row = self.env_tree.identify_row(event.y)
+        f = self.env_found.get(row) if row else None
+        if not f:
+            return
+        self.env_menu_row = row
+        for i, (what, _label) in enumerate(ENV_COPY):
+            self.env_menu.entryconfigure(i, state=tk.NORMAL if env_copy_text(f, what) else tk.DISABLED)
+        self.env_menu.tk_popup(event.x_root, event.y_root)
+
+    def copy_env(self, row: str | None, what: str) -> None:
+        """行の値・説明・直し方（または行全体）をクリップボードに写す"""
+        f = self.env_found.get(row) if row else None
+        text = env_copy_text(f, what) if f else ""
+        if not text:
+            return
+        self.root.clipboard_clear()
+        self.root.clipboard_append(text)
+        self.message.config(text="コピーしました: " + " / ".join(text.splitlines())[:120])
 
     def _env_pickable(self, row: str | None) -> bool:
         return bool(row) and "pick" in self.env_tree.item(row, "tags")
@@ -667,7 +710,7 @@ class App:
         for row, values, state, pick in env_rows(found, self.env_picked, self.env_can_fix):
             self.env_tree.insert("", tk.END, iid=row, values=values,
                                  tags=([state, "pick", "picked"] if row in self.env_picked else [state, "pick"]) if pick else [state])
-        self.env_count.config(text=f"切れている・注意 {env.problems(found)} 件（行にマウスを乗せると、下に全文が出ます）")
+        self.env_count.config(text=f"切れている・注意 {env.problems(found)} 件（行にマウスを乗せると下に全文、右クリックでコピー）")
         self._show_fix_count()
 
     def reload_env(self) -> None:

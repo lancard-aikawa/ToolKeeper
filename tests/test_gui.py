@@ -88,7 +88,17 @@ class EnvRows(unittest.TestCase):
     def test_summary_mentions_env_only_when_some(self):
         self.assertNotIn("環境", gui.summary_text(RESULT))
         r = dict(RESULT, summary=dict(RESULT["summary"], env=3))
-        self.assertIn("環境の注意 3", gui.summary_text(r))
+        self.assertIn("環境変数の注意 3（環境変数のタブ）", gui.summary_text(r))
+
+    def test_copy_text(self):
+        f = ENV_FOUND[0]
+        self.assertEqual(gui.env_copy_text(f, "value"), r"C:\Python313\Scripts")
+        self.assertEqual(gui.env_copy_text(f, "detail"), "フォルダが無い")
+        self.assertEqual(gui.env_copy_text(f, "fix"), "PATH から消す")
+        self.assertEqual(gui.env_copy_text(f, "all"), "状態: 切れている\n種類: PATH の切れ\n範囲: マシン\n名前: PATH\n"
+                         "値: C:\\Python313\\Scripts\n説明: フォルダが無い\n直し方: PATH から消す")
+        self.assertEqual(gui.env_copy_text(ENV_FOUND[1], "fix"), "")  # 直し方の無い行は空（メニューは押せなくする）
+        self.assertNotIn("範囲", gui.env_copy_text(ENV_FOUND[1], "all"))  # 範囲の無い行は省く
 
 
 FW_ROWS = [
@@ -180,7 +190,7 @@ class History(unittest.TestCase):
         self.assertFalse(failed)
         self.assertTrue(text.startswith("OpenJDK 17 のインストーラが環境変数を書き換えました:\n"
                                         "  マシンの JAVA_HOME: C:\\jdk-21\\\\ → C:\\jdk-17\\\\"))
-        self.assertIn("「環境」のタブ", text)
+        self.assertIn("「環境変数」のタブ", text)
 
     def test_admin_failure(self):
         """管理者でないと上げられない物は、管理者のターミナルで上げるかを聞く（2026-10-29 Strawberry Perl）"""
@@ -312,6 +322,21 @@ class Window(WindowBase):
             app.fix_picked()
             app.undo_env()
         run.assert_not_called()
+
+    def test_env_tab_name_and_copy(self):
+        """タブの名前は「環境変数」。見るだけでも、右クリックで直し方などを写せる"""
+        app = self.app
+        self.wait_env()
+        nb = app.notebook
+        self.assertEqual([nb.tab(t, "text") for t in nb.tabs()], ["道具", "環境変数", "通信の許可", "履歴"])
+        self.assertIn("右クリックでコピー", app.env_count.cget("text"))
+        labels = [app.env_menu.entrycget(i, "label") for i in range(len(gui.ENV_COPY))]
+        self.assertEqual(labels, ["コピー（値）", "コピー（説明）", "コピー（直し方）", "コピー（行全体）"])
+        with mock.patch.object(app.root, "clipboard_append") as put, mock.patch.object(app.root, "clipboard_clear"):
+            app.copy_env("path-missing:machine:7:aa", "fix")
+            app.copy_env("shadow::cmake:bb", "fix")  # 空なら写さない
+        put.assert_called_once_with("PATH から消す")
+        self.assertIn("コピーしました: PATH から消す", app.message.cget("text"))
 
     def test_pick_and_button(self):
         """更新のボタンは押せない状態にしない（vista テーマでは枠が消えて文字に見える）"""
