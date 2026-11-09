@@ -1,6 +1,11 @@
 """toolkeeper gui（design.md §8）。表の中身と、窓を作っての通し（画面には出さない）"""
+import gc
 import json
+import os
+import subprocess
+import sys
 import tempfile
+import threading
 import time
 import unittest
 from pathlib import Path
@@ -241,7 +246,46 @@ class WindowBase(unittest.TestCase):
             self.app.close()
         except Exception:  # noqa: BLE001
             pass
+        # 閉じた窓の残骸（循環参照）は、ここで画面のスレッドで片付ける。残すと、次の窓の裏のスレッドの中で GC が片付け、
+        # Tk が作ったのと違うスレッドで消えて「Tcl_AsyncDelete: async handler deleted by the wrong thread」でプロセスごと落ちる
+        # （2026-11-09、全体を流すとときどき落ちた）。裏のスレッドが窓を握っている間は片付かないので、先に終わるのを待つ
+        for t in threading.enumerate():
+            if t is not threading.current_thread() and t.daemon:
+                t.join(timeout=5)
+        self.app = self.root = None
+        gc.collect()
         self.tmp.cleanup()
+
+
+# 窓のテストのたびに、閉じたあとで GC を裏のスレッドで走らせる。残骸が残っていればプロセスごと落ちるので、別のプロセスで動かす
+_GC_IN_THREAD = """
+import gc, sys, threading, unittest
+import test_gui
+gc.disable()
+orig = test_gui.WindowBase.tearDown
+def tear_down(self):
+    orig(self)
+    t = threading.Thread(target=gc.collect)
+    t.start()
+    t.join()
+test_gui.WindowBase.tearDown = tear_down
+names = ["test_gui.Window.test_pick_and_button", "test_gui.Window.test_env_is_read_only_by_default",
+         "test_gui.EnvFixWindow.test_env_tab_shows_rows"]
+r = unittest.TextTestRunner(verbosity=0).run(unittest.defaultTestLoader.loadTestsFromNames(names))
+print("survived", r.wasSuccessful(), flush=True)
+"""
+
+
+class ClosedWindowIsCollectedOnMainThread(unittest.TestCase):
+    """閉じた窓は、画面のスレッドで片付く（裏のスレッドの GC で Tcl_AsyncDelete にならない。2026-11-09）"""
+
+    def test_gc_in_thread_after_close(self):
+        here = Path(__file__).resolve().parent
+        env = dict(os.environ, PYTHONPATH=os.pathsep.join([str(here.parent / "src"), str(here)]))
+        p = subprocess.run([sys.executable, "-c", _GC_IN_THREAD], cwd=here, env=env, capture_output=True,
+                           text=True, encoding="utf-8", errors="replace", timeout=120)
+        self.assertNotIn("Tcl_AsyncDelete", p.stderr)
+        self.assertIn("survived True", p.stdout, p.stderr[-2000:])
 
 
 class Window(WindowBase):
