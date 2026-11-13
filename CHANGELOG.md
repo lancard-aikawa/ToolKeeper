@@ -2,8 +2,7 @@
 
 <!-- 見出しは `## <版番号>` の形にする。まだ出していない変更は「## 未公開」に書き、リリースのときに版番号へ書き換える -->
 
-## 未公開
-
+## 0.4.0
 - Python の要らない exe を Release に付ける（`ToolKeeper-<版>-win-x64.zip`、design.md §9.3）。`toolkeeper.exe`（コマンド）と `toolkeeperw.exe`（窓を出さない。画面と定期実行）。
   設定とデータは exe の隣に置き、zip には入れない。手元では `scripts\build-exe.cmd` で作る
 - exe で動くときは、画面が `check` などを隣の `toolkeeper.exe` で呼び、`scripts\register-task.ps1` が隣の `toolkeeperw.exe` を登録する（Python を探さない）
