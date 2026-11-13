@@ -5,7 +5,16 @@ PC に入れた道具（PHP・Ghostscript・Cygwin と、winget / choco で入�
 
 設計は [docs/design.md](docs/design.md)。
 
+## 入れ方
+
+**RepoTether を使っているなら、RepoTether の「道具」から入れられる**（Python も clone も要らない）。
+
+自分で入れるときは、[Releases](https://github.com/lancard-aikawa/ToolKeeper/releases) の `ToolKeeper-<版>-win-x64.zip` を展開して使ってもよい
+（Python は要らない。`toolkeeper.exe` がコマンド、`toolkeeperw.exe gui` が画面。設定とデータは exe の隣に置く。docs/design.md §9.3）。
+
 ## 使い方
+
+ソースから動かすときは、
 
 リポジトリのフォルダで:
 

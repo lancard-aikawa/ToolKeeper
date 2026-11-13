@@ -497,6 +497,23 @@ RepoTether の「確かめる」と、ToolKeeper の画面の上の欄が使う�
 - 道具が無ければ `sources` のその値を `null` にする（Cygwin を入れていない PC など）
 - `winget --version` と `choco --version` だけは呼ぶ（どちらも 1 秒以内）
 
+### 9.3 exe で配る（Python の要らない形）
+
+RepoTether の「道具」から入れれば、Python も clone も無しで使えるようにする（2026-11-13、RepoTether の docs/tools-install.md。LockWatch の design.md §9.1 と同じ形）。
+Release に `ToolKeeper-<版>-win-x64.zip` を付ける。中身は `ToolKeeper/` の 1 つのフォルダで、PyInstaller の onedir で固める（`scripts/build-exe.cmd`、`scripts/toolkeeper.spec`）。
+
+| ファイル | 役目 |
+|---|---|
+| `toolkeeper.exe` | コンソール用。コマンドとして呼ぶ（RepoTether が `status --json` などの出力を読む。画面が `check` などを呼ぶのもこちら） |
+| `toolkeeperw.exe` | 窓を出さない版（pythonw に当たる）。画面（`toolkeeperw.exe gui`）と定期実行（`--log check`）が使う |
+| `_internal/` | 2 つの exe が共有する Python と ToolKeeper の中身 |
+| `scripts/*.ps1` | 定期実行の登録（隣に `toolkeeperw.exe` があれば Python を探さずにそれを使う）、Ghostscript の入れ替え（§3.3）、マシンの環境変数（§3.7） |
+| `toolkeeper.sample.json`・`README.md`・`LICENSE`・`CHANGELOG.md` | |
+
+- 設定（`toolkeeper.json`）とデータ（`data/`）は exe の隣に置く（§6）。zip には入れない。
+  **更新は zip の中身だけを入れ替え、`toolkeeper.json` と `data/` には触らない**（入れ替える側の約束。RepoTether の「道具」がこれを守る）
+- 固めるのは Python 3.13（Tk 8.6）と PyInstaller 6.22.3 以上
+
 ## 10. 決めていないこと
 
 - 新しい更新を知らせる手段（Windows の通知、Slack、画面を開いたときだけ、RepoTether の「道具」タブの数（§9））

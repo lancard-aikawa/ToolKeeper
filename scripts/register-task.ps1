@@ -31,17 +31,24 @@ if ($Unregister) {
 }
 
 $repo = Split-Path -Parent $PSScriptRoot
-# A base interpreter's pythonw.exe (no .venv needed). find-pythonw.ps1 prints the reason when none is found.
-$pythonw = & (Join-Path $PSScriptRoot "find-pythonw.ps1")
-if ($LASTEXITCODE -ne 0 -or -not $pythonw) {
-    throw "No Python to run the task (see the message above)."
+# The exe build (docs/design.md section 9.3) has toolkeeperw.exe (no console) next to scripts\; use it, no Python needed.
+# Otherwise use a base interpreter's pythonw.exe (no .venv needed). find-pythonw.ps1 prints the reason when none is found.
+$exeW = Join-Path $repo "toolkeeperw.exe"
+if (Test-Path -LiteralPath $exeW) {
+    $pythonw = $exeW
+    $arguments = "--log"
+} else {
+    $pythonw = & (Join-Path $PSScriptRoot "find-pythonw.ps1")
+    if ($LASTEXITCODE -ne 0 -or -not $pythonw) {
+        throw "No Python to run the task (see the message above)."
+    }
+    $launcher = Join-Path $repo "scripts\toolkeeper-launch.py"
+    $arguments = "`"$launcher`" --log"
 }
-$launcher = Join-Path $repo "scripts\toolkeeper-launch.py"
 if (-not (Get-Command winget -ErrorAction SilentlyContinue)) {
     Write-Warning "winget is not on PATH. The task will report it as a failed source."
 }
 
-$arguments = "`"$launcher`" --log"
 if ($Data) { $arguments += " --data `"$Data`"" }
 $arguments += " check"
 

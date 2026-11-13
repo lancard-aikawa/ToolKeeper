@@ -11,7 +11,6 @@ import json
 import os
 import queue
 import subprocess
-import sys
 import threading
 from pathlib import Path
 
@@ -23,7 +22,7 @@ from . import config as cfgmod
 from . import status as statusmod
 from .ghostscript import _ps51_env
 from .labels import ENV_KIND, ENV_STATE, FW_DIRECTION, FW_STATE, SCOPE_LABEL, TIER_LABEL, can_update, note_text
-from .paths import APP_DIR, data_dir
+from .paths import APP_DIR, data_dir, self_command
 
 _NO_WINDOW = getattr(subprocess, "CREATE_NO_WINDOW", 0)
 PICK_OFF, PICK_ON = "[ ]", "[x]"
@@ -280,7 +279,7 @@ class App:
         return args
 
     def toolkeeper(self, *args: str) -> list[str]:
-        return [sys.executable, "-m", "toolkeeper", *self._global_args(), *args]
+        return [*self_command(), *self._global_args(), *args]
 
     # ---- 裏の仕事（別スレッド → キュー → 画面のスレッドで受け取る）
 
